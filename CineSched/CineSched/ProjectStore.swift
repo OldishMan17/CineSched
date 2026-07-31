@@ -85,7 +85,8 @@ extension ContentView {
             projectTitle: projectTitle,
             isShiftModeEnabled: isShiftModeEnabled,
             createdDate: projectCreatedDate,
-            productionInfo: productionInfo
+            productionInfo: productionInfo,
+            productions: productions
         )
         do {
             let data = try ProjectFile.encode(projectData)
@@ -188,7 +189,8 @@ extension ContentView {
             projectTitle: projectTitle,
             isShiftModeEnabled: isShiftModeEnabled,
             createdDate: projectCreatedDate,
-            productionInfo: productionInfo
+            productionInfo: productionInfo,
+            productions: productions
         )
         do {
             let data = try ProjectFile.encode(projectData)
@@ -239,6 +241,19 @@ extension ContentView {
             isShiftModeEnabled = loaded.isShiftModeEnabled ?? false
             projectCreatedDate = loaded.createdDate
             productionInfo     = loaded.productionInfo ?? ProductionInfo()
+            // Migration: a file saved before productions existed has no `productions` list
+            // at all (or an empty one). Every scene in it already decoded to
+            // Production.defaultID (Scene's own init(from:) falls back to that when the
+            // field is missing), so what's needed here is just making sure a Production
+            // with that same id actually exists to represent them.
+            if let loadedProductions = loaded.productions, !loadedProductions.isEmpty {
+                productions = loadedProductions
+            } else {
+                productions = [Production(
+                    id: Production.defaultID,
+                    name: loaded.projectTitle.isEmpty ? "Untitled Production" : loaded.projectTitle
+                )]
+            }
             if let first = shootDays.first?.date, let last = shootDays.last?.date {
                 startDate = first
                 endDate   = last
@@ -255,6 +270,9 @@ extension ContentView {
             shootDays    = legacy.shootDays
             projectTitle = "Loaded Project"
             isShiftModeEnabled = false
+            // Same migration as above: this format predates productions entirely, so
+            // every scene already decoded to Production.defaultID — give that id a home.
+            productions  = [Production(id: Production.defaultID, name: "Loaded Project")]
             if let first = shootDays.first?.date, let last = shootDays.last?.date {
                 startDate = first
                 endDate   = last
@@ -277,6 +295,7 @@ extension ContentView {
         }
         projectTitle       = "Untitled Movie"
         productionInfo     = ProductionInfo()
+        productions        = [Production(id: Production.defaultID, name: "Untitled Movie")]
         projectCreatedDate = Date()
         markDirty()
     }

@@ -21,6 +21,28 @@ enum DayNightType: String, Codable, CaseIterable {
     var displayName: String { rawValue }
 }
 
+// MARK: - Production
+
+/// A single production (e.g. one film/show) that scenes belong to. Only one is ever created
+/// or shown today — there's no UI yet to add another or switch between them — but every
+/// scene already carries a productionID so that future step doesn't require touching every
+/// scene again. See CineSched/DOCS/CALLSHEET_SPEC.md §5 for why this comes first.
+struct Production: Identifiable, Codable, Hashable {
+    let id: UUID
+    var name: String
+
+    init(id: UUID = UUID(), name: String = "") {
+        self.id   = id
+        self.name = name
+    }
+
+    /// Fixed (not random) id for "the one production" every scene belongs to today: every
+    /// freshly created scene gets this id, and every scene loaded from a project file saved
+    /// before productions existed is migrated to this same id — so old data and new data
+    /// always agree on which production they're in, with no per-file guessing required.
+    static let defaultID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+}
+
 // MARK: - Scene
 
 struct Scene: Identifiable, Codable, Hashable {
@@ -31,6 +53,7 @@ struct Scene: Identifiable, Codable, Hashable {
     var dayNightType: DayNightType
     var cast: [String]
     var summary: String
+    var productionID: UUID
 
     init(
         title: String,
@@ -38,7 +61,8 @@ struct Scene: Identifiable, Codable, Hashable {
         estimatedTime: Int,
         dayNightType: DayNightType = .day,
         cast: [String] = [],
-        summary: String = ""
+        summary: String = "",
+        productionID: UUID = Production.defaultID
     ) {
         self.id            = UUID()
         self.title         = title
@@ -47,10 +71,11 @@ struct Scene: Identifiable, Codable, Hashable {
         self.dayNightType  = dayNightType
         self.cast          = cast
         self.summary       = summary
+        self.productionID  = productionID
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, title, duration, estimatedTime, dayNightType, cast, summary
+        case id, title, duration, estimatedTime, dayNightType, cast, summary, productionID
     }
 
     init(from decoder: Decoder) throws {
@@ -61,6 +86,9 @@ struct Scene: Identifiable, Codable, Hashable {
         estimatedTime = try c.decode(Int.self,          forKey: .estimatedTime)
         dayNightType  = try c.decode(DayNightType.self, forKey: .dayNightType)
         summary       = try c.decodeIfPresent(String.self, forKey: .summary) ?? ""
+        // Absent on any scene saved before productions existed — migrate it to the one
+        // default production rather than leaving it unassigned.
+        productionID  = try c.decodeIfPresent(UUID.self, forKey: .productionID) ?? Production.defaultID
         if let array = try? c.decode([String].self, forKey: .cast) {
             cast = array
         } else if let legacy = try? c.decode(String.self, forKey: .cast) {
@@ -338,6 +366,7 @@ struct ProjectData: Codable {
     var createdDate:        Date
     var isShiftModeEnabled: Bool?
     var productionInfo:     ProductionInfo?
+    var productions:        [Production]?   // absent on any file saved before productions existed
 
     init(
         allScenes:          [Scene],
@@ -345,7 +374,8 @@ struct ProjectData: Codable {
         projectTitle:       String = "Untitled Movie",
         isShiftModeEnabled: Bool?  = false,
         createdDate:        Date   = Date(),
-        productionInfo:     ProductionInfo? = nil
+        productionInfo:     ProductionInfo? = nil,
+        productions:        [Production]?   = nil
     ) {
         self.allScenes          = allScenes
         self.shootDays          = shootDays
@@ -353,6 +383,7 @@ struct ProjectData: Codable {
         self.createdDate        = createdDate
         self.isShiftModeEnabled = isShiftModeEnabled
         self.productionInfo     = productionInfo
+        self.productions        = productions
     }
 }
 

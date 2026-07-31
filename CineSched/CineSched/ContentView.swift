@@ -31,6 +31,9 @@ struct ContentView: View {
     @State var isShiftModeEnabled: Bool = false
     @State var projectCreatedDate: Date = Date()  // preserved across saves; never reset on re-save
     @State var productionInfo: ProductionInfo = ProductionInfo()
+    // Only one production exists today (no UI yet to add/switch), but every scene already
+    // carries a productionID pointing at it — see Production.defaultID in Models.swift.
+    @State var productions: [Production] = [Production(id: Production.defaultID, name: "Untitled Movie")]
 
     // Auto-save: flip to true on any change; a debounced .onChange triggers the actual write
     @State var hasUnsavedChanges: Bool = false
@@ -622,7 +625,8 @@ struct ContentView: View {
                                 estimatedTime: item.scene.estimatedTime,
                                 dayNightType:  item.scene.dayNightType,
                                 cast:          item.scene.cast,
-                                summary:       item.scene.summary
+                                summary:       item.scene.summary,
+                                productionID:  item.scene.productionID
                             ))
                             markDirty()
                         }

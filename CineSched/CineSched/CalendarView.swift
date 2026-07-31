@@ -450,7 +450,8 @@ struct CompactMonthCalendarView: View {
             estimatedTime: scene.estimatedTime,
             dayNightType: scene.dayNightType,
             cast: scene.cast,
-            summary: scene.summary
+            summary: scene.summary,
+            productionID: scene.productionID
         ))
         onSceneChanged()
     }
