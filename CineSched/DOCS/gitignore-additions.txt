@@ -1,0 +1,26 @@
+# ── Reference documents — never commit ──────────────────────────────
+# Real production paperwork contains crew names, phone numbers, emails,
+# and home addresses. Keep it on local disk only.
+
+docs/reference/
+reference/
+*.docx
+*.xls
+*.xlsx
+*.fdx
+*.pdf
+
+# Exported call sheets from real productions
+Exports/
+exports/
+*_CALLSHEET*
+*_CALL_SHEET*
+*_PRELIM*
+*_DPR*
+
+# ── macOS / Xcode ───────────────────────────────────────────────────
+.DS_Store
+xcuserdata/
+*.xcuserstate
+build/
+DerivedData/
