@@ -115,9 +115,26 @@ struct ContentView: View {
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebarView
+                // Caps how wide the sidebar can be dragged. Without a max, the sidebar
+                // was free to expand and eat into the calendar's width no matter how
+                // wide the window was — which is why widening the window alone didn't
+                // stop the day columns from getting squeezed.
+                .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 340)
         } detail: {
             detailView
         }
+        // The sidebar's open/close animation was racing against this window's custom
+        // toolbar mid-slide, which crashed macOS's own layout system (a window-layout
+        // watchdog killing the app after too many back-to-back relayouts). Turning off
+        // the animation for this view means the sidebar now snaps open/closed instantly
+        // instead of sliding — a little less polished, but there's no multi-frame
+        // animation left for the toolbar to collide with.
+        .transaction { $0.disablesAnimations = true }
+        // Floor for the window itself: below this, the sidebar and the 7 calendar day
+        // columns (95pt each, enough for the compact "Thu 07/09" fallback) no longer
+        // fit without squishing or overlapping, so macOS won't let the window shrink
+        // past this.
+        .frame(minWidth: 1050, minHeight: 600)
         .preferredColorScheme(isDarkMode ? .dark : .light)
         .alert("Script Import",  isPresented: $showingImportAlert) { Button("OK") {} } message: { Text(importMessage) }
         .alert("CineSched",      isPresented: $showingAlert)        { Button("OK") {} } message: { Text(alertMessage) }
@@ -213,9 +230,16 @@ struct ContentView: View {
     // visible (and each button stays identifiable) even when the window is narrow and
     // macOS shrinks the toolbar down to icon-only. The .help() tooltip always leads with
     // the button's name, so hovering confirms what it is even in icon-only mode.
+    //
+    // Every item gets an explicit, fixed `id`. Without one, SwiftUI has to infer each
+    // toolbar item's identity from its position/content, and re-derives that guess every
+    // time this toolbar is rebuilt — which happens on every frame of the sidebar's
+    // open/close animation. An unstable guess there is what triggered a macOS layout
+    // crash ("Update Constraints in Window") when toggling the sidebar. A fixed id
+    // removes the guesswork.
     @ToolbarContentBuilder
     private var mainToolbar: some ToolbarContent {
-        ToolbarItem(placement: .automatic) {
+        ToolbarItem(id: "new", placement: .automatic) {
             Button {
                 showingClearAllConfirmation = true
             } label: {
@@ -225,7 +249,7 @@ struct ContentView: View {
             .help("New — clear all scenes and start a new project")
         }
 
-        ToolbarItem(placement: .automatic) {
+        ToolbarItem(id: "productionSetup", placement: .automatic) {
             Button {
                 showingProductionSetup = true
             } label: {
@@ -234,7 +258,7 @@ struct ContentView: View {
             .help("Production Setup — company, director, cast, and crew")
         }
 
-        ToolbarItem(placement: .automatic) {
+        ToolbarItem(id: "importScript", placement: .automatic) {
             Button {
                 showFDXOpenPanel()
             } label: {
@@ -243,7 +267,7 @@ struct ContentView: View {
             .help("Import Script — import scenes from a Final Draft .fdx file")
         }
 
-        ToolbarItem(placement: .automatic) {
+        ToolbarItem(id: "save", placement: .automatic) {
             Button {
                 saveProject()
             } label: {
@@ -252,7 +276,7 @@ struct ContentView: View {
             .help("Save — save project as a .json file")
         }
 
-        ToolbarItem(placement: .automatic) {
+        ToolbarItem(id: "load", placement: .automatic) {
             Button {
                 showJSONOpenPanel()
             } label: {
@@ -261,7 +285,7 @@ struct ContentView: View {
             .help("Load — load a saved project")
         }
 
-        ToolbarItem(placement: .automatic) {
+        ToolbarItem(id: "exportPDF", placement: .automatic) {
             Button {
                 showSchedulePDFSavePanel()
             } label: {
@@ -271,7 +295,10 @@ struct ContentView: View {
             .help("Export PDF — export the calendar schedule as a PDF")
         }
 
-        ToolbarItem(placement: .automatic) {
+        // This item's label text/icon both change with isDarkMode, but the id stays
+        // fixed — so SwiftUI updates the existing button in place instead of treating
+        // a mode switch as "remove one item, insert a different one."
+        ToolbarItem(id: "appearanceToggle", placement: .automatic) {
             Button {
                 isDarkMode.toggle()
             } label: {
@@ -285,6 +312,13 @@ struct ContentView: View {
     // MARK: - Sidebar
 
     private var sidebarView: some View {
+        // The whole sidebar scrolls as one piece now. Previously only the Boneyard list
+        // (at the bottom) had its own scroll view — if the title, date range, and new
+        // scene sections above it took up more height than the sidebar had room for
+        // (easy to hit in a shorter window, or with both sections expanded), the Boneyard
+        // got squeezed down with nothing able to scroll it back into view. Now the whole
+        // column scrolls together, so the Boneyard is always reachable.
+        ScrollView {
         VStack(alignment: .leading, spacing: 10) {
             TextField("Movie Title", text: $projectTitle)
                 .font(.title2)
@@ -293,10 +327,13 @@ struct ContentView: View {
 
             Text("Shoot Days: \(shootDays.filter { !$0.scenes.isEmpty }.count)")
                 .font(.subheadline).foregroundColor(.gray)
+                .lineLimit(1)
 
             if let first = shootDays.first?.date, let last = shootDays.last?.date {
                 Text("From \(formattedDate(first)) to \(formattedDate(last))")
                     .font(.subheadline).foregroundColor(.gray)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
             }
 
             Divider().padding(.vertical)
@@ -371,12 +408,10 @@ struct ContentView: View {
             Text("⌘-click or ⇧-click to select multiple, then drag as a group")
                 .font(.caption2).foregroundColor(.secondary)
 
-            // No trailing Spacer here — the Boneyard list expands to consume
-            // whatever vertical space the collapsed sections above free up.
             boneyardList
-                .frame(maxHeight: .infinity)
         }
         .padding()
+        }
         .frame(minWidth: 300, maxHeight: .infinity)
     }
 
@@ -524,17 +559,28 @@ struct ContentView: View {
 
     // MARK: - Boneyard list
 
+    // No ScrollView here — this used to have its own, but nesting it inside the
+    // sidebar's single outer ScrollView (see sidebarView) meant two scroll areas
+    // competing for the same scroll gesture. Now this is just a plain stack of rows,
+    // and the sidebar's outer ScrollView carries the whole column, Boneyard included.
     private var boneyardList: some View {
-        ScrollView {
-            VStack(spacing: 0) {
+        VStack(spacing: 0) {
                 ForEach(sortedScenes, id: \.scene.id) { item in
                     HStack {
                         Circle().fill(item.scene.dayNightType.color).frame(width: 8, height: 8)
+                        // A long scene title truncates with "…" instead of wrapping onto a
+                        // second line, which used to push the D/N tag, duration, and delete
+                        // button out of the row (or off it) when the sidebar was narrow.
                         Text(item.scene.title)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
                         Spacer()
                         Text(item.scene.dayNightType == .day ? "D" : "N")
                             .font(.caption).foregroundColor(item.scene.dayNightType.color).fontWeight(.semibold)
+                            .fixedSize()
                         Text("\(FractionParser.formatEighths(item.scene.duration)) / \(formattedTime(item.scene.estimatedTime))")
+                            .lineLimit(1)
+                            .fixedSize()
                         Button {
                             allScenes.remove(at: item.index)
                             markDirty()
@@ -588,7 +634,6 @@ struct ContentView: View {
                     }
                     Divider()
                 }
-            }
         }
         .tooltipContainer()
     }
@@ -668,14 +713,23 @@ struct ContentView: View {
                 .font(.headline).fontWeight(.semibold)
                 .lineLimit(1).truncationMode(.tail)
                 .frame(maxWidth: 200)
+                // Lowest priority in this row: if space runs out, the title is what
+                // shrinks/truncates first — it already degrades gracefully with "…".
+                .layoutPriority(0)
 
             Divider().frame(height: 20)
 
+            // fixedSize() locks this group to its natural width instead of letting SwiftUI
+            // compress it, and layoutPriority(1) makes it the last thing to give up space.
+            // Together they guarantee the day/scene/time counts always render fully — the
+            // title truncates before any of these three numbers would.
             HStack(spacing: 15) {
                 statBadge(icon: "calendar", value: "\(scheduledDays.count)", label: "days",   color: .blue)
                 statBadge(icon: "film",     value: "\(totalScenes)",          label: "scenes", color: .green)
                 statBadge(icon: "clock",    value: totalEstTime,              label: nil,      color: .purple)
             }
+            .fixedSize()
+            .layoutPriority(1)
 
             Spacer()
         }
@@ -687,8 +741,9 @@ struct ContentView: View {
             Image(systemName: icon).foregroundColor(color).font(.caption)
             Text(value)
                 .font(.system(.body, design: .rounded)).fontWeight(.semibold).foregroundColor(color)
+                .lineLimit(1)
             if let label = label {
-                Text(label).font(.caption).foregroundColor(.secondary)
+                Text(label).font(.caption).foregroundColor(.secondary).lineLimit(1)
             }
         }
     }

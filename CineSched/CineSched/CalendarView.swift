@@ -52,8 +52,11 @@ struct CompactMonthCalendarView: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: true) {
-                let columns = Array(repeating: GridItem(.flexible(), spacing: 16), count: 7)
-                LazyVGrid(columns: columns, spacing: 16) {
+                // Tighter gaps between days (8pt instead of 16pt) give each column more
+                // of the window's width to work with. minimum: 95 is enough for the
+                // compact "Thu 07/09" fallback plus the grip/call-sheet/conflict icons.
+                let columns = Array(repeating: GridItem(.flexible(minimum: 95), spacing: 8), count: 7)
+                LazyVGrid(columns: columns, spacing: 8) {
                     ForEach(Array(shootDays.enumerated()), id: \.element.id) { dayIndex, day in
                         dayCell(day: day, dayIndex: dayIndex)
                             .id(day.id)
@@ -127,8 +130,17 @@ struct CompactMonthCalendarView: View {
                     callSheetDay = day
                 } label: {
                     HStack(spacing: 4) {
-                        Text(formattedDate(day.date))
+                        // Always the compact numeric form. An earlier version used
+                        // ViewThatFits to switch to the fuller month-name format when
+                        // there was room, but ViewThatFits has to actually measure both
+                        // candidates against the available width — for every day cell,
+                        // on every single re-render. Typing one character anywhere in
+                        // the sidebar re-renders this whole calendar, so that measuring
+                        // work was happening for 30+ day cells per keystroke, which is
+                        // what froze the app. A plain Text costs almost nothing to size.
+                        Text(formattedCalendarDayDateCompact(day.date))
                             .font(.caption).bold().foregroundColor(.primary)
+                            .lineLimit(1)
                         if day.hasCallSheetData {
                             Circle()
                                 .fill(Color.blue)
@@ -201,7 +213,9 @@ struct CompactMonthCalendarView: View {
             }
         }
         .padding(6)
-        .frame(maxWidth: .infinity, minHeight: 120, alignment: .topLeading)
+        // minWidth keeps each day column from being squeezed narrower than its date
+        // header and totals can actually display without overlapping each other.
+        .frame(minWidth: 95, maxWidth: .infinity, minHeight: 120, alignment: .topLeading)
         .background(Color.gray.opacity(0.2))
         .overlay(
             RoundedRectangle(cornerRadius: 8)
@@ -533,6 +547,7 @@ struct SceneCardView: View {
 
                 Text("(\(formattedEighths(scene.duration)), \(formattedTime(scene.estimatedTime)))")
                     .font(.caption2).foregroundColor(.secondary)
+                    .lineLimit(1)
 
                 // Cast only shows when the sidebar is collapsed — with the sidebar open there's
                 // not enough width for it to read cleanly, and it's left off the PDF entirely

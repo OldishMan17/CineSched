@@ -10,6 +10,14 @@ func formattedDate(_ date: Date) -> String {
     return formatter.string(from: date)
 }
 
+/// Compact form of the calendar day header, e.g. "Thu 07/09" — weekday + numeric
+/// month/day, no year. Used when a day column is too narrow for the full month name.
+func formattedCalendarDayDateCompact(_ date: Date) -> String {
+    let formatter = DateFormatter()
+    formatter.dateFormat = "E MM/dd"
+    return formatter.string(from: date)
+}
+
 /// Returns an eighths-of-a-page count as a readable fraction string.
 func formattedEighths(_ totalEighths: Int) -> String {
     FractionParser.formatEighths(totalEighths)
