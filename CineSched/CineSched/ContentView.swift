@@ -204,6 +204,82 @@ struct ContentView: View {
                 hasUnsavedChanges = false
             }
         }
+        .toolbar { mainToolbar }
+    }
+
+    // MARK: - Toolbar
+
+    // Each button pairs an SF Symbol with its label via Label(...), so the icon stays
+    // visible (and each button stays identifiable) even when the window is narrow and
+    // macOS shrinks the toolbar down to icon-only. The .help() tooltip always leads with
+    // the button's name, so hovering confirms what it is even in icon-only mode.
+    @ToolbarContentBuilder
+    private var mainToolbar: some ToolbarContent {
+        ToolbarItem(placement: .automatic) {
+            Button {
+                showingClearAllConfirmation = true
+            } label: {
+                Label("New", systemImage: "calendar.badge.plus")
+            }
+            .foregroundColor(.red)
+            .help("New — clear all scenes and start a new project")
+        }
+
+        ToolbarItem(placement: .automatic) {
+            Button {
+                showingProductionSetup = true
+            } label: {
+                Label("Production Setup", systemImage: "calendar.and.person")
+            }
+            .help("Production Setup — company, director, cast, and crew")
+        }
+
+        ToolbarItem(placement: .automatic) {
+            Button {
+                showFDXOpenPanel()
+            } label: {
+                Label("Import Script", systemImage: "document.badge.plus")
+            }
+            .help("Import Script — import scenes from a Final Draft .fdx file")
+        }
+
+        ToolbarItem(placement: .automatic) {
+            Button {
+                saveProject()
+            } label: {
+                Label("Save", systemImage: "square.and.arrow.down")
+            }
+            .help("Save — save project as a .json file")
+        }
+
+        ToolbarItem(placement: .automatic) {
+            Button {
+                showJSONOpenPanel()
+            } label: {
+                Label("Load", systemImage: "folder.badge.plus")
+            }
+            .help("Load — load a saved project")
+        }
+
+        ToolbarItem(placement: .automatic) {
+            Button {
+                showSchedulePDFSavePanel()
+            } label: {
+                Label("Export PDF", systemImage: "square.and.arrow.up")
+            }
+            .foregroundColor(.blue)
+            .help("Export PDF — export the calendar schedule as a PDF")
+        }
+
+        ToolbarItem(placement: .automatic) {
+            Button {
+                isDarkMode.toggle()
+            } label: {
+                Label(isDarkMode ? "Light Mode" : "Dark Mode",
+                      systemImage: isDarkMode ? "lightswitch.off" : "lightswitch.on")
+            }
+            .help(isDarkMode ? "Light Mode — switch to light appearance" : "Dark Mode — switch to dark appearance")
+        }
     }
 
     // MARK: - Sidebar
