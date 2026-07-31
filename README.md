@@ -76,12 +76,12 @@ A macOS application for scheduling film shoots with visual calendar layouts, sce
 ## Installation
 
 ### Requirements
-- macOS 13.0 (Ventura) or later
-- Xcode 14.0 or later
+- macOS 14.0 (Sonoma) or later
+- Xcode 15.0 or later
 
 ### Setup
 1. Clone or download this repository
-2. Open `CineSched.xcodeproj` in Xcode
+2. Open `CineSched/CineSched.xcodeproj` in Xcode
 3. Build and run (⌘R)
 
 ## Usage
@@ -339,4 +339,4 @@ For issues or questions, please open a GitHub issue. Check the troubleshooting s
 ---
 
 **Version**: 3.3
-**Compatible With**: macOS 13.0+, Final Draft 12+
+**Compatible With**: macOS 14.0+, Final Draft 12+
