@@ -451,7 +451,8 @@ struct CompactMonthCalendarView: View {
             dayNightType: scene.dayNightType,
             cast: scene.cast,
             summary: scene.summary,
-            productionID: scene.productionID
+            productionID: scene.productionID,
+            sceneNumber: scene.sceneNumber
         ))
         onSceneChanged()
     }
@@ -537,6 +538,12 @@ struct SceneCardView: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 3) {
+                    if !scene.sceneNumber.isEmpty {
+                        Text(scene.sceneNumber)
+                            .font(.caption2).fontWeight(.semibold).foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .fixedSize()
+                    }
                     Text(scene.title)
                         .font(.caption2).fontWeight(.medium).lineLimit(2)
                     if hasConflict {

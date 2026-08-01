@@ -54,6 +54,11 @@ struct Scene: Identifiable, Codable, Hashable {
     var cast: [String]
     var summary: String
     var productionID: UUID
+    // Real scene numbers are text, not integers — "9pt", "A20", "60pt4" are all valid and
+    // none of them fit in an Int. See CALLSHEET_SPEC.md §3.1 and SceneNumberParser in
+    // Parsers.swift for the natural-sort comparator that keeps these in real shooting-script
+    // order (9, 9pt, 10, 11pt, A20, B20) rather than plain alphabetical order.
+    var sceneNumber: String
 
     init(
         title: String,
@@ -62,7 +67,8 @@ struct Scene: Identifiable, Codable, Hashable {
         dayNightType: DayNightType = .day,
         cast: [String] = [],
         summary: String = "",
-        productionID: UUID = Production.defaultID
+        productionID: UUID = Production.defaultID,
+        sceneNumber: String? = nil
     ) {
         self.id            = UUID()
         self.title         = title
@@ -72,10 +78,14 @@ struct Scene: Identifiable, Codable, Hashable {
         self.cast          = cast
         self.summary       = summary
         self.productionID  = productionID
+        // Defaults to whatever number-looking prefix is already in the typed title (e.g.
+        // "9pt. INT. KITCHEN - DAY") so scenes get a usable scene number without requiring
+        // a dedicated input field yet.
+        self.sceneNumber   = sceneNumber ?? SceneNumberParser.extractFromTitle(title)
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, title, duration, estimatedTime, dayNightType, cast, summary, productionID
+        case id, title, duration, estimatedTime, dayNightType, cast, summary, productionID, sceneNumber
     }
 
     init(from decoder: Decoder) throws {
@@ -105,6 +115,14 @@ struct Scene: Identifiable, Codable, Hashable {
         // Absent on any scene saved before productions existed — migrate it to the one
         // default production rather than leaving it unassigned.
         productionID  = try c.decodeIfPresent(UUID.self, forKey: .productionID) ?? Production.defaultID
+        // Absent on any scene saved before this field existed — fall back to whatever
+        // number-looking prefix is already sitting in the title text, same as a brand new
+        // scene created from a typed title would get.
+        if let existing = try c.decodeIfPresent(String.self, forKey: .sceneNumber), !existing.isEmpty {
+            sceneNumber = existing
+        } else {
+            sceneNumber = SceneNumberParser.extractFromTitle(title)
+        }
         if let array = try? c.decode([String].self, forKey: .cast) {
             cast = array
         } else if let legacy = try? c.decode(String.self, forKey: .cast) {

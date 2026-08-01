@@ -123,3 +123,88 @@ struct TimeParser {
 
     static var placeholderText: String { "e.g. 4 (4hr), 15 (15min), 2:30 (2hr 30min)" }
 }
+
+// MARK: - SceneNumberParser
+
+/// Real scene numbers aren't plain integers — see CALLSHEET_SPEC.md §3.1. A shooting script
+/// numbers scenes in order (1, 2, 3…), but revisions insert scenes between existing ones
+/// (lettered: "9A", or prefixed: "A9") without renumbering everything after, and a scene
+/// shot across more than one day gets split into "pt" (partial) continuations ("9pt",
+/// "60pt4"). None of that survives being stored as an Int, and sorting the raw text
+/// alphabetically gets the order wrong too — "10" would sort before "9".
+struct SceneNumberParser {
+
+    /// The four components real scene numbers decompose into, in sort priority order:
+    /// the numeric core, an optional leading letter (prefix), an optional trailing letter
+    /// (suffix), and a "pt" index (0 for a non-partial scene, 1 for a bare "pt" with no
+    /// explicit index, or the explicit trailing number in e.g. "60pt4").
+    struct SortKey: Comparable {
+        let core: Int
+        let prefix: String
+        let suffix: String
+        let ptIndex: Int
+
+        static func < (lhs: SortKey, rhs: SortKey) -> Bool {
+            if lhs.core   != rhs.core   { return lhs.core   < rhs.core }
+            if lhs.prefix != rhs.prefix { return lhs.prefix < rhs.prefix }
+            if lhs.suffix != rhs.suffix { return lhs.suffix < rhs.suffix }
+            return lhs.ptIndex < rhs.ptIndex
+        }
+    }
+
+    /// Decomposes a scene number string into its sortable components.
+    /// Examples: "86" -> (86, "", "", 0) · "9pt" -> (9, "", "", 1) · "A20" -> (20, "A", "", 0)
+    /// · "75A" -> (75, "", "A", 0) · "60pt4" -> (60, "", "", 4)
+    static func sortKey(for sceneNumber: String) -> SortKey {
+        let trimmed = sceneNumber.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        var rest = Substring(trimmed)
+
+        var prefix = ""
+        while let first = rest.first, first.isLetter {
+            prefix.append(first)
+            rest = rest.dropFirst()
+        }
+
+        var digits = ""
+        while let first = rest.first, first.isNumber {
+            digits.append(first)
+            rest = rest.dropFirst()
+        }
+
+        guard let core = Int(digits) else {
+            // Doesn't look like a real scene number at all (e.g. a banner-style entry like
+            // "B ROLL") — push it to the very end rather than interleaving it arbitrarily
+            // among properly-numbered scenes or crashing.
+            return SortKey(core: .max, prefix: trimmed, suffix: "", ptIndex: 0)
+        }
+
+        if rest.hasPrefix("PT") {
+            let afterPT = rest.dropFirst(2)
+            let ptIndex = Int(afterPT) ?? 1   // bare "PT" with no number = the 1st continuation
+            return SortKey(core: core, prefix: prefix, suffix: "", ptIndex: ptIndex)
+        } else {
+            return SortKey(core: core, prefix: prefix, suffix: String(rest), ptIndex: 0)
+        }
+    }
+
+    /// True if `lhs` should sort before `rhs` in real shooting-script order — e.g. for
+    /// ["9", "9pt", "10", "11pt", "A20", "B20"], sorting with this comparator produces
+    /// exactly that order, where plain alphabetical sorting would not.
+    static func sortsBefore(_ lhs: String, _ rhs: String) -> Bool {
+        sortKey(for: lhs) < sortKey(for: rhs)
+    }
+
+    /// Best-effort scene number extracted from a scene's title text, for a scene that
+    /// predates the dedicated sceneNumber field (or a manually-typed title formatted like
+    /// "9pt. INT. KITCHEN - DAY"). Returns "" if the title doesn't start with anything
+    /// recognizable as a scene number.
+    static func extractFromTitle(_ title: String) -> String {
+        let pattern = #"^([A-Za-z]?\d+(?:[Pp][Tt]\d*)?[A-Za-z]?)\."#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: title, range: NSRange(title.startIndex..., in: title)),
+              let range = Range(match.range(at: 1), in: title) else {
+            return ""
+        }
+        return String(title[range])
+    }
+}

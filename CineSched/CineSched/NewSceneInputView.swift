@@ -4,10 +4,11 @@
 import SwiftUI
 
 struct NewSceneInputView: View {
-    @Binding var newSceneTitle: String
-    @Binding var newDuration:   String
-    @Binding var newEstimate:   String
-    @Binding var allScenes:     [Scene]
+    @Binding var newSceneTitle:  String
+    @Binding var newSceneNumber: String
+    @Binding var newDuration:    String
+    @Binding var newEstimate:    String
+    @Binding var allScenes:      [Scene]
     let onSceneAdded: () -> Void
 
     @State private var durationIsValid:      Bool         = true
@@ -16,7 +17,12 @@ struct NewSceneInputView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            TextField("Scene Title", text: $newSceneTitle)
+            HStack(spacing: 6) {
+                TextField("Scene #", text: $newSceneNumber)
+                    .frame(width: 70)
+                    .help("e.g. 9, 9pt, A20 — leave blank to use whatever number is typed at the start of the title")
+                TextField("Scene Title", text: $newSceneTitle)
+            }
 
             // Duration field — optional for Custom strips
             VStack(alignment: .leading, spacing: 4) {
@@ -116,10 +122,14 @@ struct NewSceneInputView: View {
             title:         newSceneTitle,
             duration:      duration,
             estimatedTime: estimate,
-            dayNightType:  newDayNightType
+            dayNightType:  newDayNightType,
+            // nil (not "") when left blank, so Scene's own init falls back to whatever
+            // number-looking prefix is in the typed title, same as before this field existed.
+            sceneNumber:   newSceneNumber.isEmpty ? nil : newSceneNumber
         ))
 
         newSceneTitle   = ""
+        newSceneNumber  = ""
         newDuration     = ""
         newEstimate     = ""
         newDayNightType = .day

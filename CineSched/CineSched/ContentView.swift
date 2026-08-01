@@ -39,9 +39,10 @@ struct ContentView: View {
     @State var hasUnsavedChanges: Bool = false
 
     // MARK: UI / sheet state
-    @State private var newSceneTitle: String = ""
-    @State private var newDuration:   String = ""
-    @State private var newEstimate:   String = ""
+    @State private var newSceneTitle:  String = ""
+    @State private var newSceneNumber: String = ""
+    @State private var newDuration:    String = ""
+    @State private var newEstimate:    String = ""
 
     @State var showingAlert             = false
     @State var showingImportAlert       = false
@@ -84,7 +85,7 @@ struct ContentView: View {
 
     // Boneyard sort — persisted so your preferred sort (e.g. Location) is still
     // applied the next time you open the project.
-    enum BoneyardSort: String, CaseIterable { case defaultOrder, location, intExt, cast, dayNight }
+    enum BoneyardSort: String, CaseIterable { case defaultOrder, sceneNumber, location, intExt, cast, dayNight }
     @AppStorage("CineSchedBoneyardSort") private var boneyardSort: BoneyardSort = .defaultOrder
 
     // Collapsible sidebar sections — persisted so the layout you leave with is the
@@ -369,11 +370,12 @@ struct ContentView: View {
             // New Scene form — collapsible to free up room for the Boneyard
             DisclosureGroup(isExpanded: $isNewSceneExpanded) {
                 NewSceneInputView(
-                    newSceneTitle: $newSceneTitle,
-                    newDuration:   $newDuration,
-                    newEstimate:   $newEstimate,
-                    allScenes:     $allScenes,
-                    onSceneAdded:  { markDirty() }
+                    newSceneTitle:  $newSceneTitle,
+                    newSceneNumber: $newSceneNumber,
+                    newDuration:    $newDuration,
+                    newEstimate:    $newEstimate,
+                    allScenes:      $allScenes,
+                    onSceneAdded:   { markDirty() }
                 )
                 .padding(.top, 6)
             } label: {
@@ -394,11 +396,12 @@ struct ContentView: View {
                 }
                 Spacer()
                 Menu {
-                    Button("Default Order") { boneyardSort = .defaultOrder }
-                    Button("Location")      { boneyardSort = .location }
-                    Button("INT / EXT")     { boneyardSort = .intExt }
-                    Button("Cast")          { boneyardSort = .cast }
-                    Button("Day / Night")   { boneyardSort = .dayNight }
+                    Button("Default Order")  { boneyardSort = .defaultOrder }
+                    Button("Scene Number")   { boneyardSort = .sceneNumber }
+                    Button("Location")       { boneyardSort = .location }
+                    Button("INT / EXT")      { boneyardSort = .intExt }
+                    Button("Cast")           { boneyardSort = .cast }
+                    Button("Day / Night")    { boneyardSort = .dayNight }
                 } label: {
                     HStack(spacing: 3) {
                         Text(boneyardSortLabel)
@@ -512,6 +515,7 @@ struct ContentView: View {
     private var boneyardSortLabel: String {
         switch boneyardSort {
         case .defaultOrder: return "Default"
+        case .sceneNumber:  return "Scene #"
         case .location:     return "Location"
         case .intExt:       return "INT/EXT"
         case .cast:         return "Cast"
@@ -553,6 +557,15 @@ struct ContentView: View {
         switch boneyardSort {
         case .defaultOrder:
             sortedScenes = indexed
+        case .sceneNumber:
+            // Scenes with no number at all (blank) sort after every properly-numbered
+            // scene, rather than before — an unnumbered scene isn't "scene zero".
+            sortedScenes = indexed.sorted {
+                let aBlank = $0.scene.sceneNumber.isEmpty
+                let bBlank = $1.scene.sceneNumber.isEmpty
+                if aBlank != bBlank { return !aBlank }
+                return SceneNumberParser.sortsBefore($0.scene.sceneNumber, $1.scene.sceneNumber)
+            }
         case .location:
             sortedScenes = indexed.sorted { locationSortKey($0.scene.title) < locationSortKey($1.scene.title) }
         case .intExt:
@@ -589,6 +602,12 @@ struct ContentView: View {
                 ForEach(sortedScenes, id: \.scene.id) { item in
                     HStack {
                         Circle().fill(item.scene.dayNightType.color).frame(width: 8, height: 8)
+                        if !item.scene.sceneNumber.isEmpty {
+                            Text(item.scene.sceneNumber)
+                                .font(.caption).fontWeight(.semibold).foregroundColor(.secondary)
+                                .lineLimit(1)
+                                .fixedSize()
+                        }
                         // A long scene title truncates with "…" instead of wrapping onto a
                         // second line, which used to push the D/N tag, duration, and delete
                         // button out of the row (or off it) when the sidebar was narrow.
@@ -644,7 +663,8 @@ struct ContentView: View {
                                 dayNightType:  item.scene.dayNightType,
                                 cast:          item.scene.cast,
                                 summary:       item.scene.summary,
-                                productionID:  item.scene.productionID
+                                productionID:  item.scene.productionID,
+                                sceneNumber:   item.scene.sceneNumber
                             ))
                             markDirty()
                         }

@@ -371,7 +371,8 @@ extension ContentView {
                     title:         "\(ps.sceneNumber). \(ps.location)",
                     duration:      1,
                     estimatedTime: 15,
-                    dayNightType:  type
+                    dayNightType:  type,
+                    sceneNumber:   ps.sceneNumber
                 ))
                 count += 1
             }
