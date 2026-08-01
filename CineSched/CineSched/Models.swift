@@ -355,19 +355,152 @@ struct ProductionInfo: Codable, Equatable {
     }
 }
 
+// MARK: - BannerItem
+
+/// A non-scene entry that can sit in a day's schedule alongside scenes — a company move, a
+/// safety meeting, pre-lighting, a production meeting. Deliberately lightweight compared to
+/// Scene: a call sheet renders one of these as a single bold banner line spanning the whole
+/// table width, not a full scene row — see CALLSHEET_LAYOUT.md §3.2 and
+/// CALLSHEET_SPEC.md §2.4. There's no UI yet to create one; this just gets the data model
+/// ready for that.
+struct BannerItem: Identifiable, Codable, Hashable {
+    let id: UUID
+    var label: String
+    var note: String
+
+    init(label: String = "", note: String = "") {
+        self.id    = UUID()
+        self.label = label
+        self.note  = note
+    }
+}
+
+// MARK: - DayItem
+
+/// One entry in a day's ordered schedule — either a Scene or a BannerItem, in whatever
+/// order the user arranges them. This is what makes "Scene 12, then a PRE-LIGHT banner,
+/// then Scene 13" representable at all: both kinds of entry live in the *same* list, at
+/// the *same* level, rather than scenes being the list and banners being some separate,
+/// unordered thing attached to the day.
+enum DayItem: Identifiable, Hashable {
+    case scene(Scene)
+    case banner(BannerItem)
+
+    var id: UUID {
+        switch self {
+        case .scene(let scene):   return scene.id
+        case .banner(let banner): return banner.id
+        }
+    }
+}
+
+extension DayItem: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case type, scene, banner
+    }
+    private enum ItemType: String, Codable {
+        case scene, banner
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        // No "type" key at all only happens if something outside this app's own encoder
+        // hand-wrote a day item without one — fall back to treating it as a scene, since
+        // that's the only kind of entry that has ever existed until now.
+        let type = try c.decodeIfPresent(ItemType.self, forKey: .type) ?? .scene
+        switch type {
+        case .banner:
+            self = .banner(try c.decode(BannerItem.self, forKey: .banner))
+        case .scene:
+            self = .scene(try c.decode(Scene.self, forKey: .scene))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .scene(let scene):
+            try c.encode(ItemType.scene, forKey: .type)
+            try c.encode(scene, forKey: .scene)
+        case .banner(let banner):
+            try c.encode(ItemType.banner, forKey: .type)
+            try c.encode(banner, forKey: .banner)
+        }
+    }
+}
+
 // MARK: - ShootDay
 
 struct ShootDay: Identifiable, Codable {
     let id: UUID
     var date:      Date
-    var scenes:    [Scene]       = []
-    var callSheet: CallSheetData = CallSheetData()
+    // The single ordered list of what's happening this day — scenes and banners together,
+    // in the order they'll shoot. See DayItem above for why this is one list, not two.
+    var items:     [DayItem]
+    var callSheet: CallSheetData
 
     init(date: Date, scenes: [Scene] = [], callSheet: CallSheetData = CallSheetData()) {
         self.id        = UUID()
         self.date      = date
-        self.scenes    = scenes
+        self.items     = scenes.map { .scene($0) }
         self.callSheet = callSheet
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, date, items, scenes, callSheet
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id        = try c.decode(UUID.self, forKey: .id)
+        date      = try c.decode(Date.self, forKey: .date)
+        callSheet = try c.decodeIfPresent(CallSheetData.self, forKey: .callSheet) ?? CallSheetData()
+        if let decodedItems = try c.decodeIfPresent([DayItem].self, forKey: .items) {
+            items = decodedItems
+        } else {
+            // A file saved before DayItem existed only ever had a flat "scenes" array —
+            // its existing order is already the correct shooting order, so it's kept as-is,
+            // just wrapped as scene items.
+            let legacyScenes = try c.decodeIfPresent([Scene].self, forKey: .scenes) ?? []
+            items = legacyScenes.map { .scene($0) }
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(date, forKey: .date)
+        try c.encode(items, forKey: .items)
+        try c.encode(callSheet, forKey: .callSheet)
+    }
+
+    /// A view of just the scene entries, in order — nearly everything in the app only
+    /// cares about scenes, not banners, so this lets almost every existing read site keep
+    /// working completely unchanged.
+    ///
+    /// Setting this replaces the scene entries with the given array, in the given order —
+    /// which is exactly how every existing scene edit already works (add one, remove one,
+    /// reorder by drag, swap two days' whole scene lists): each of those becomes "read the
+    /// current scenes, apply one array change, write the result back," and this setter is
+    /// what "write back" now means. Any banners already on the day are kept, moved to the
+    /// end. That's a deliberate simplification — there's no UI yet to place a banner at a
+    /// specific position relative to scenes, so there's nothing meaningful yet to preserve
+    /// about exactly where a banner sat through a full scene-list rewrite. Revisit once
+    /// banner-editing UI exists.
+    var scenes: [Scene] {
+        get {
+            items.compactMap {
+                if case .scene(let scene) = $0 { return scene }
+                return nil
+            }
+        }
+        set {
+            let banners = items.filter {
+                if case .banner = $0 { return true }
+                return false
+            }
+            items = newValue.map { .scene($0) } + banners
+        }
     }
 
     var totalDuration:      Int { scenes.reduce(0) { $0 + $1.duration } }
