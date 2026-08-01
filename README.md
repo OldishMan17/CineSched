@@ -29,7 +29,7 @@ A macOS application for scheduling film shoots with visual calendar layouts, sce
 - "Boneyard" sidebar for unscheduled scenes with sort options: Location, INT/EXT, Cast, Day/Night, or Default — your chosen sort is remembered the next time you open the project
 - **Multi-select scenes in the Boneyard** — ⌘-click to add/remove individual scenes, ⇧-click to select a range in the current sort order, then drag the whole selection onto a calendar day at once (handy for grabbing everything at one location and scheduling it together)
 - Double-click to edit any scene
-- Flexible duration input (pages in eighths: "1 7/8", "15", etc.)
+- Flexible duration input (natural page notation: "4", "4 3/8", "4.375", "7/8", etc.)
 - Flexible time input (hours or minutes: "4", "2:30", "15")
 
 ### 📄 Final Draft Script Import
@@ -105,7 +105,7 @@ A macOS application for scheduling film shoots with visual calendar layouts, sce
 4. **Add Scenes**
    - **Manual Entry**: Use the "New Scene" section in the sidebar
      - Enter scene title (e.g., "3. INT. KITCHEN - DAY")
-     - Enter duration in pages (e.g., "1 7/8", "2", "15" for 15/8ths)
+     - Enter duration in pages (e.g., "2" for 2 whole pages, "4 3/8" or "4.375" for 4 and 3/8 pages)
      - Enter estimated time (e.g., "4" for 4 hours, "2:30" for 2.5 hours, "15" for 15 minutes). Less than "14" is interpreted as hours. "15" and greater is minutes.
      - Select Day, Night, or Custom (for company moves, meal breaks, etc.)
      - Click "Add Scene"
@@ -180,12 +180,15 @@ A macOS application for scheduling film shoots with visual calendar layouts, sce
 
 ## Duration & Time Input Examples
 
-### Page Duration (in eighths)
-- `15` = 15 eighths (1 7/8 pages)
-- `8` = 8 eighths (1 page)
-- `1 7/8` = 1 and 7/8 pages
-- `7/8` = 7/8 of a page
-- `2.5` = 2.5 pages (converts to eighths)
+### Page Duration (natural script notation)
+- `4` = 4 whole pages
+- `1` = 1 whole page
+- `4 3/8` = 4 and 3/8 pages
+- `7/8` = 7/8 of a page (a bare fraction alone, not a whole-page count)
+- `4.375` = 4 and 3/8 pages (decimal form, same as `4 3/8`)
+
+Stored internally as eighths of a page (so `4 3/8` is kept as `35`), but you never need to
+think in eighths when typing — enter pages the way you'd write them in a script.
 
 ### Estimated Time
 - `4` = 4 hours (numbers ≤10 default to hours)

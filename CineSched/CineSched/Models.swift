@@ -82,7 +82,23 @@ struct Scene: Identifiable, Codable, Hashable {
         let c         = try decoder.container(keyedBy: CodingKeys.self)
         id            = try c.decode(UUID.self,         forKey: .id)
         title         = try c.decode(String.self,       forKey: .title)
-        duration      = try c.decode(Int.self,          forKey: .duration)
+        // duration is pages stored as an integer count of eighths (15 == "1 7/8"). Every
+        // scene this app has ever saved already stores it that way, so this is the path
+        // almost every file takes. The two fallbacks below only matter for a file from
+        // somewhere else (or hand-edited) that stored pages as a plain decimal (1.875) or
+        // a fraction string ("1 7/8", "0.625") instead — see CALLSHEET_SPEC.md §3.2 for why
+        // that's a real bug to guard against: decimal page counts don't accumulate cleanly
+        // when totaled, which is exactly what storing eighths as an integer avoids.
+        if let eighths = try? c.decode(Int.self, forKey: .duration) {
+            duration = eighths
+        } else if let decimalPages = try? c.decode(Double.self, forKey: .duration) {
+            duration = Int((decimalPages * 8).rounded())
+        } else if let text = try? c.decode(String.self, forKey: .duration),
+                  let parsed = FractionParser.parseToEighths(text) {
+            duration = parsed
+        } else {
+            duration = 0
+        }
         estimatedTime = try c.decode(Int.self,          forKey: .estimatedTime)
         dayNightType  = try c.decode(DayNightType.self, forKey: .dayNightType)
         summary       = try c.decodeIfPresent(String.self, forKey: .summary) ?? ""

@@ -92,7 +92,7 @@ struct SceneEditSheet: View {
                     .onChange(of: editDuration) { validateDuration() }
 
                     if !durationIsValid {
-                        Text("Invalid format. Use: 15 (eighths), 1 7/8 (mixed), or 7/8 (fraction)")
+                        Text("Invalid format. Use: 4 (pages), 4 3/8 (mixed), or 7/8 (fraction)")
                             .font(.caption).foregroundColor(.red)
                     } else if let eighths = FractionParser.parseToEighths(editDuration), !editDuration.isEmpty {
                         Text("= \(FractionParser.formatEighths(eighths)) pages (\(eighths) eighths)")

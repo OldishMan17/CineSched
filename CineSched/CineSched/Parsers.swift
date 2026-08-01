@@ -7,19 +7,21 @@ import Foundation
 
 struct FractionParser {
 
-    /// Converts various fraction formats to eighths of a page.
-    /// Supports: "15" (eighths), "1 7/8" (mixed), "7/8" (fraction), "2.5" (decimal pages)
+    /// Converts natural script-page notation to eighths of a page.
+    /// Supports: "4" (4 whole pages), "4 3/8" (mixed), "7/8" (fraction alone), "4.375" (decimal pages)
     static func parseToEighths(_ input: String) -> Int? {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
-        // Simple integer — already in eighths
-        if let integer = Int(trimmed) { return integer }
+        // Plain whole number — whole pages, e.g. "4" = 4 pages = 32 eighths. (Not "4 eighths":
+        // that reading is technically correct script jargon but reads as a typo to anyone
+        // typing a page count, which is what this field is for.)
+        if let wholePages = Int(trimmed) { return wholePages * 8 }
 
-        // Decimal number — convert pages to eighths
+        // Decimal number — pages, e.g. "4.375" = 4 3/8 pages
         if let decimal = Double(trimmed) { return Int(round(decimal * 8)) }
 
-        // Mixed fraction: "1 7/8"
+        // Mixed fraction: "4 3/8" = 4 and 3/8 pages
         let mixedPattern = #"^(\d+)\s+(\d+)/(\d+)$"#
         if trimmed.range(of: mixedPattern, options: .regularExpression) != nil {
             let components = trimmed.components(separatedBy: .whitespaces)
@@ -57,7 +59,7 @@ struct FractionParser {
         }
     }
 
-    static var placeholderText: String { "e.g. 15, 1 7/8, 7/8" }
+    static var placeholderText: String { "e.g. 4, 4 3/8, 4.375" }
 }
 
 // MARK: - TimeParser
