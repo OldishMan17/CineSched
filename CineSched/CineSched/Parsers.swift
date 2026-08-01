@@ -134,27 +134,36 @@ struct TimeParser {
 /// alphabetically gets the order wrong too — "10" would sort before "9".
 struct SceneNumberParser {
 
-    /// The four components real scene numbers decompose into, in sort priority order:
-    /// the numeric core, an optional leading letter (prefix), an optional trailing letter
-    /// (suffix), and a "pt" index (0 for a non-partial scene, 1 for a bare "pt" with no
-    /// explicit index, or the explicit trailing number in e.g. "60pt4").
+    /// The components real scene numbers decompose into, in sort priority order: the
+    /// numeric core, which "insert family" it belongs to, the insert letter itself, and a
+    /// "pt" index.
+    ///
+    /// The insert family matters because a letter *before* the number and a letter *after*
+    /// the number mean opposite things on a real set. A prefix like "A20" is a scene
+    /// inserted *before* 20 once the script was already locked — script supervisors number
+    /// it off the scene it comes before, so it belongs before plain "20" (order: A20, B20,
+    /// 20). A suffix like "75A" is the opposite: inserted *after* 75, numbered off the
+    /// scene it follows, so it belongs after plain "75" (order: 75, 75A, 75B).
     struct SortKey: Comparable {
         let core: Int
-        let prefix: String
-        let suffix: String
+        let insertRank: Int   // 0 = prefixed (inserted before the plain scene)
+                               // 1 = the plain scene itself (no insert letter)
+                               // 2 = suffixed (inserted after the plain scene)
+        let letter: String    // the insert letter ("" for the plain scene), A before B
         let ptIndex: Int
 
         static func < (lhs: SortKey, rhs: SortKey) -> Bool {
-            if lhs.core   != rhs.core   { return lhs.core   < rhs.core }
-            if lhs.prefix != rhs.prefix { return lhs.prefix < rhs.prefix }
-            if lhs.suffix != rhs.suffix { return lhs.suffix < rhs.suffix }
+            if lhs.core       != rhs.core       { return lhs.core       < rhs.core }
+            if lhs.insertRank != rhs.insertRank { return lhs.insertRank < rhs.insertRank }
+            if lhs.letter     != rhs.letter     { return lhs.letter     < rhs.letter }
             return lhs.ptIndex < rhs.ptIndex
         }
     }
 
     /// Decomposes a scene number string into its sortable components.
-    /// Examples: "86" -> (86, "", "", 0) · "9pt" -> (9, "", "", 1) · "A20" -> (20, "A", "", 0)
-    /// · "75A" -> (75, "", "A", 0) · "60pt4" -> (60, "", "", 4)
+    /// Examples: "86" -> (86, plain, "", 0) · "9pt" -> (9, plain, "", 1)
+    /// · "A20" -> (20, prefixed, "A", 0) · "75A" -> (75, suffixed, "A", 0)
+    /// · "60pt4" -> (60, plain, "", 4)
     static func sortKey(for sceneNumber: String) -> SortKey {
         let trimmed = sceneNumber.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         var rest = Substring(trimmed)
@@ -175,16 +184,25 @@ struct SceneNumberParser {
             // Doesn't look like a real scene number at all (e.g. a banner-style entry like
             // "B ROLL") — push it to the very end rather than interleaving it arbitrarily
             // among properly-numbered scenes or crashing.
-            return SortKey(core: .max, prefix: trimmed, suffix: "", ptIndex: 0)
+            return SortKey(core: .max, insertRank: 1, letter: trimmed, ptIndex: 0)
         }
 
         if rest.hasPrefix("PT") {
             let afterPT = rest.dropFirst(2)
             let ptIndex = Int(afterPT) ?? 1   // bare "PT" with no number = the 1st continuation
-            return SortKey(core: core, prefix: prefix, suffix: "", ptIndex: ptIndex)
-        } else {
-            return SortKey(core: core, prefix: prefix, suffix: String(rest), ptIndex: 0)
+            if !prefix.isEmpty {
+                // e.g. "B79pt" — a "B"-prefixed insert that's also been split into parts.
+                return SortKey(core: core, insertRank: 0, letter: prefix, ptIndex: ptIndex)
+            }
+            return SortKey(core: core, insertRank: 1, letter: "", ptIndex: ptIndex)
         }
+        if !prefix.isEmpty {
+            return SortKey(core: core, insertRank: 0, letter: prefix, ptIndex: 0)
+        }
+        if !rest.isEmpty {
+            return SortKey(core: core, insertRank: 2, letter: String(rest), ptIndex: 0)
+        }
+        return SortKey(core: core, insertRank: 1, letter: "", ptIndex: 0)
     }
 
     /// True if `lhs` should sort before `rhs` in real shooting-script order — e.g. for
