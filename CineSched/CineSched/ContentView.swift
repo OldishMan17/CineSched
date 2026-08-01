@@ -100,6 +100,9 @@ struct ContentView: View {
     @State private var selectedSceneIDs:   Set<UUID> = []
     @State private var lastSelectedSceneID: UUID?
 
+    // Highlights the Boneyard while a scene dragged out of the calendar is hovering over it.
+    @State private var isBoneyardDropTargeted = false
+
     // MARK: - Computed statistics
 
     private var scheduledDays: [ShootDay] { shootDays.filter { !$0.scenes.isEmpty } }
@@ -415,6 +418,21 @@ struct ContentView: View {
         }
         .padding()
         }
+        .background(
+            isBoneyardDropTargeted ? Color.accentColor.opacity(0.12) : Color.clear
+        )
+        // Attached to the whole sidebar's ScrollView — a direct, always-present child of
+        // the NavigationSplitView sidebar slot — rather than nested inside the Boneyard's
+        // own content. Nesting it deep inside the scrollable content never once registered
+        // a hover/drop in this pane, no matter which drag-and-drop API was used; this tests
+        // whether that was specifically about being buried inside the scroll content.
+        .dropDestination(for: String.self) { items, _ in
+            guard let payload = items.first else { return false }
+            moveScenesToBoneyard(payload)
+            return true
+        } isTargeted: { targeted in
+            isBoneyardDropTargeted = targeted
+        }
         .frame(minWidth: 300, maxHeight: .infinity)
     }
 
@@ -639,6 +657,8 @@ struct ContentView: View {
                     Divider()
                 }
         }
+        // minHeight guarantees the Boneyard has some presence even when empty.
+        .frame(minHeight: 60)
         .tooltipContainer()
     }
 
@@ -815,6 +835,32 @@ struct ContentView: View {
             allScenes.append(scene)
             markDirty()
         }
+    }
+
+    /// Moves one or more scheduled scenes back into the Boneyard — used when a scene is
+    /// dragged out of the calendar and dropped on the Boneyard. Same drag-payload format as
+    /// everywhere else (comma-separated scene ids), so it also works if a future multi-select
+    /// calendar drag is added. Unlike removeScene(_:from:), the caller doesn't already know
+    /// which day each scene is on — the drop only carries scene ids — so this looks it up.
+    func moveScenesToBoneyard(_ payload: String) {
+        let ids = payload.components(separatedBy: ",").compactMap { UUID(uuidString: $0) }
+        guard !ids.isEmpty else { return }
+
+        var movedAny = false
+        for id in ids {
+            for dayIdx in shootDays.indices {
+                if let sceneIdx = shootDays[dayIdx].scenes.firstIndex(where: { $0.id == id }) {
+                    let scene = shootDays[dayIdx].scenes.remove(at: sceneIdx)
+                    allScenes.append(scene)
+                    movedAny = true
+                    break
+                }
+            }
+        }
+        guard movedAny else { return }
+        markDirty()
+        pruneSelection()
+        recomputeConflicts()
     }
 
     // MARK: - Calendar update (merge vs shift)
