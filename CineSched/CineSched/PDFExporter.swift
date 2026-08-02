@@ -19,6 +19,14 @@ class PDFExporter {
     private static let bannerNoteFont  = NSFont.systemFont(ofSize: 6.5)
     private static let castFont        = NSFont.systemFont(ofSize: 7)
 
+    // A day's cast list and a banner's label/note must never silently truncate with an
+    // ellipsis — a real cast list can run to a dozen names, and a banner label or note is
+    // free text with no natural length limit. Row height already has no upper cap (see
+    // calculateIdealRowHeights), so these can genuinely just wrap as many lines as needed;
+    // this is a generous finite ceiling purely as a sanity backstop against a truly
+    // pathological input, not a limit meant to ever actually engage in real use.
+    private static let unboundedLineCap = 25
+
     static func generatePDF(
         shootDays: [ShootDay],
         projectTitle: String,
@@ -159,20 +167,42 @@ class PDFExporter {
         font.ascender - font.descender + font.leading
     }
 
+    /// Used identically for both measuring (boundingRect) and drawing (draw(with:)) — those
+    /// two APIs can compute subtly different line-wrapping/line-spacing when given different
+    /// option sets, and that mismatch was exactly why text measured as "fits in N lines"
+    /// could still render as only N-1 lines at draw time, silently losing the rest to
+    /// truncatesLastVisibleLine. Using one shared constant for both calls guarantees they
+    /// can never drift out of sync with each other again.
+    private static let textLayoutOptions: NSString.DrawingOptions = [
+        .usesLineFragmentOrigin, .usesFontLeading, .truncatesLastVisibleLine
+    ]
+
     /// Height needed to draw `line` wrapped within `maxWidth`, capped at its maxLines.
+    ///
+    /// This deliberately thinks in whole lines rather than continuous point heights. Font
+    /// metrics (ascender/descender/leading, used for `single` below) are only an
+    /// *approximation* of the line spacing CoreText's real text layout actually uses when
+    /// it wraps and draws text — the true spacing is consistently a little taller (measured
+    /// at roughly 4-5% per line for the fonts used here). That gap compounds with every
+    /// additional line, so a cast list that measures as "fits in 5 lines" can come up just
+    /// short of a real 5th line at draw time and lose the rest to truncatesLastVisibleLine.
+    ///
+    /// The fix is a proportional per-line margin (15%, comfortably above the measured ~4-5%
+    /// gap) rather than a flat "+1 whole extra line" — a flat extra line was enough headroom
+    /// for a 5-line cast list, but wrapped in totalHeight() below, which sums this per
+    /// paragraph, it meant a banner's label + note (two short paragraphs) got charged two
+    /// full extra lines while a scene's single combined paragraph only got charged one —
+    /// visibly taller banner boxes for the same amount of actual text.
     private static func wrappedHeight(_ line: ItemLine, maxWidth: CGFloat) -> CGFloat {
         let single = lineHeight(for: line.referenceFont)
-        guard maxWidth > 0 else { return single }
+        guard maxWidth > 0, single > 0 else { return single }
         let unbounded = line.text.boundingRect(
             with: CGSize(width: maxWidth, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading]
+            options: textLayoutOptions
         ).height
-        // Generous headroom above the naive "maxLines × one line" estimate: CoreText's real
-        // line spacing (used by both boundingRect and draw(with:)) doesn't land exactly on
-        // font-metrics arithmetic, and a cap that's even a fraction of a point too tight
-        // silently truncates text that should have fit in exactly maxLines lines.
-        let cap = CGFloat(line.maxLines) * single * 1.3 + 4
-        return min(max(unbounded, single), cap)
+        let estimatedLines = max(1, (unbounded / single).rounded(.up))
+        let cappedLines     = min(estimatedLines, CGFloat(line.maxLines))
+        return cappedLines * single * 1.15 + 1
     }
 
     private static func totalHeight(of lines: [ItemLine], maxWidth: CGFloat) -> CGFloat {
@@ -217,7 +247,7 @@ class PDFExporter {
                     attributes: [.font: bannerMetaFont, .foregroundColor: NSColor.darkGray]
                 ))
             }
-            lines.append(ItemLine(text: labelLine, referenceFont: bannerFont, maxLines: 2))
+            lines.append(ItemLine(text: labelLine, referenceFont: bannerFont, maxLines: unboundedLineCap))
 
             let note = banner.note.trimmingCharacters(in: .whitespacesAndNewlines)
             if !note.isEmpty {
@@ -226,7 +256,7 @@ class PDFExporter {
                         .font: bannerNoteFont, .foregroundColor: NSColor.darkGray
                     ]),
                     referenceFont: bannerNoteFont,
-                    maxLines: 2
+                    maxLines: unboundedLineCap
                 ))
             }
             return lines
@@ -303,7 +333,7 @@ class PDFExporter {
             let castLine = ItemLine(
                 text: NSAttributedString(string: "Cast: " + cast.joined(separator: ", "), attributes: [.font: castFont]),
                 referenceFont: castFont,
-                maxLines: 2
+                maxLines: unboundedLineCap
             )
             total += wrappedHeight(castLine, maxWidth: innerWidth) + 2
         }
@@ -394,11 +424,14 @@ class PDFExporter {
                     attributes: [.font: castFont, .foregroundColor: NSColor.darkGray]
                 ),
                 referenceFont: castFont,
-                maxLines: 2
+                maxLines: unboundedLineCap
             )
+            // width: innerWidth (not content.width) — this must match the width wrappedHeight
+            // measured against above, or the draw pass can wrap differently than the height
+            // was computed for.
             let h = wrappedHeight(castLine, maxWidth: innerWidth)
-            let boxRect = CGRect(x: content.minX, y: content.maxY - yOffset - h, width: content.width, height: h)
-            castLine.text.draw(with: boxRect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+            let boxRect = CGRect(x: content.minX, y: content.maxY - yOffset - h, width: innerWidth, height: h)
+            castLine.text.draw(with: boxRect, options: textLayoutOptions)
             yOffset += h + 2
         }
 
@@ -420,7 +453,7 @@ class PDFExporter {
             for line in lines {
                 let h = wrappedHeight(line, maxWidth: innerWidth)
                 let textRect = CGRect(x: boxRect.minX + 3, y: lineY - h, width: boxRect.width - 6, height: h)
-                line.text.draw(with: textRect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+                line.text.draw(with: textRect, options: textLayoutOptions)
                 lineY -= h
             }
 
