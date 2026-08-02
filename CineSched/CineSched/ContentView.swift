@@ -59,6 +59,10 @@ struct ContentView: View {
 
     // Appearance
     @AppStorage("CineSchedDarkMode") var isDarkMode: Bool = false
+    // Schedule PDF export — defaults to black-and-white; some productions print this on
+    // office printers where color washes out or costs more, so B&W stays the safe default.
+    @AppStorage("CineSchedExportPDFColor") var exportPDFInColor: Bool = false
+    @State private var showingExportPDFOptions = false
     @EnvironmentObject var recentFiles: RecentFilesStore
     /// The file this project was last saved to or loaded from — nil for a project that's
     /// never touched disk yet. "Save" writes here silently when set; "Save As…" always
@@ -294,12 +298,15 @@ struct ContentView: View {
 
         ToolbarItem(id: "exportPDF", placement: .automatic) {
             Button {
-                showSchedulePDFSavePanel()
+                showingExportPDFOptions = true
             } label: {
                 Label("Export PDF", systemImage: "square.and.arrow.up")
             }
             .foregroundColor(.blue)
             .help("Export PDF — export the calendar schedule as a PDF")
+            .popover(isPresented: $showingExportPDFOptions) {
+                exportPDFOptionsPopover
+            }
         }
 
         // This item's label text/icon both change with isDarkMode, but the id stays
@@ -314,6 +321,35 @@ struct ContentView: View {
             }
             .help(isDarkMode ? "Light Mode — switch to light appearance" : "Dark Mode — switch to dark appearance")
         }
+    }
+
+    // MARK: - Export PDF Options
+
+    /// Shown before the actual save panel — defaults to black-and-white every time a project
+    /// is opened fresh (the toggle itself persists between exports within a session via
+    /// @AppStorage, but always starts unchecked for a reason: some productions print this on
+    /// office printers where color washes out or simply costs more per page).
+    private var exportPDFOptionsPopover: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Export Schedule PDF").font(.headline)
+            Toggle("Print in color", isOn: $exportPDFInColor)
+                .toggleStyle(.checkbox)
+            Text("Day scenes orange, night scenes blue, custom scenes green — matching the calendar on screen. Leave off for black-and-white.")
+                .font(.caption).foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(width: 240, alignment: .leading)
+            HStack {
+                Spacer()
+                Button("Cancel") { showingExportPDFOptions = false }
+                Button("Export…") {
+                    showingExportPDFOptions = false
+                    showSchedulePDFSavePanel()
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(14)
+        .frame(width: 260)
     }
 
     // MARK: - Sidebar

@@ -43,11 +43,23 @@ struct CompactMonthCalendarView: View {
     @State private var draggingDayId:       UUID? = nil
     @State private var dayDropTargetId:     UUID? = nil
 
-    // Drag/drop state
+    // Drag/drop state — position is an index into a day's full items list (scenes and
+    // banners together), not scenes alone, so the two can be reordered relative to each other.
     @State private var dropTargetDayId:    UUID?
     @State private var dropTargetPosition: Int?
-    @State private var draggedSceneId:     UUID?
-    @State private var interactingSceneId: UUID?
+    @State private var draggedItemId:      UUID?
+    @State private var interactingItemId:  UUID?
+
+    // New/edit (non-scene) item form — a lightweight popover shared by both the "+" control
+    // (create) and double-clicking an existing item (edit), rather than a whole new sidebar
+    // form or sheet, since this is a much smaller/rarer thing to create or edit than a scene.
+    // The three text fields are shared between both modes; which mode is active is just
+    // whichever of these two is non-nil.
+    @State private var addingBannerToDayId: UUID? = nil          // "+" button popover (create)
+    @State private var editingBanner: (dayId: UUID, id: UUID)?   // item-card popover (edit)
+    @State private var newBannerLabel: String = ""
+    @State private var newBannerNote:  String = ""
+    @State private var newBannerTime:  String = ""
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -162,43 +174,94 @@ struct CompactMonthCalendarView: View {
                 .help("Click to open call sheet for this day")
             }
 
+            // The day's full schedule — scenes and non-scene items (company moves, safety
+            // meetings, etc.) together in one ordered list, in whatever order the user has
+            // arranged them. See DayItem in Models.swift.
             VStack(spacing: 2) {
-                ForEach(Array(day.scenes.enumerated()), id: \.element.id) { sceneIndex, scene in
+                ForEach(Array(day.items.enumerated()), id: \.element.id) { itemIndex, item in
                     VStack(spacing: 0) {
-                        if shouldShowDropIndicator(dayId: day.id, position: sceneIndex) {
+                        if shouldShowDropIndicator(dayId: day.id, position: itemIndex) {
                             DropIndicatorView()
                         }
-                        SceneCardView(
-                            scene: scene,
-                            dayId: day.id,
-                            dayIndex: dayIndex,
-                            sceneIndex: sceneIndex,
-                            interactingSceneId: $interactingSceneId,
-                            isSelected: selectedSceneIDs.contains(scene.id),
-                            selectionCount: selectedSceneIDs.count,
-                            showCast: isSidebarCollapsed,
-                            hasConflict: conflictSceneIDs.contains(scene.id),
-                            onEdit:      { editScene(dayIndex: dayIndex, sceneIndex: sceneIndex, scene: scene, dayId: day.id) },
-                            onRemove:    { removeFromDay(scene, dayId: day.id) },
-                            onDuplicate: { duplicateScene(scene) },
-                            onDragStart: { draggedSceneId = scene.id },
-                            onDragEnd:   { draggedSceneId = nil },
-                            onSelect:    { selectScene(scene, dayId: day.id) },
-                            onSendToDay: { beginSendToDay(scene) }
-                        )
+                        switch item {
+                        case .scene(let scene):
+                            // The edit sheet navigates scene-to-scene (skipping any banners
+                            // in between), so it needs the scene's position *among scenes
+                            // only* — separate from itemIndex, which is its position in the
+                            // full mixed list used for layout and drag/drop.
+                            let sceneOnlyIndex = day.scenes.firstIndex(where: { $0.id == scene.id }) ?? 0
+                            SceneCardView(
+                                scene: scene,
+                                dayId: day.id,
+                                dayIndex: dayIndex,
+                                sceneIndex: sceneOnlyIndex,
+                                interactingItemId: $interactingItemId,
+                                isSelected: selectedSceneIDs.contains(scene.id),
+                                selectionCount: selectedSceneIDs.count,
+                                showCast: isSidebarCollapsed,
+                                hasConflict: conflictSceneIDs.contains(scene.id),
+                                onEdit:      { editScene(dayIndex: dayIndex, sceneIndex: sceneOnlyIndex, scene: scene, dayId: day.id) },
+                                onRemove:    { removeFromDay(scene, dayId: day.id) },
+                                onDuplicate: { duplicateScene(scene) },
+                                onDragStart: { draggedItemId = scene.id },
+                                onDragEnd:   { draggedItemId = nil },
+                                onSelect:    { selectScene(scene, dayId: day.id) },
+                                onSendToDay: { beginSendToDay(scene) }
+                            )
+                        case .banner(let banner):
+                            BannerCardView(
+                                banner: banner,
+                                interactingItemId: $interactingItemId,
+                                onEdit:      { beginEditBanner(banner, dayId: day.id) },
+                                onDelete:    { removeBanner(id: banner.id, from: day.id) },
+                                onDragStart: { draggedItemId = banner.id },
+                                onDragEnd:   { draggedItemId = nil }
+                            )
+                            .popover(isPresented: Binding(
+                                get: { editingBanner?.id == banner.id },
+                                set: { if !$0 { editingBanner = nil } }
+                            )) {
+                                bannerFormPopoverContent(dayId: day.id, editingBannerId: banner.id)
+                            }
+                        }
                     }
-                    .onDrop(of: [UTType.text.identifier], delegate: SceneDropDelegate(
+                    .onDrop(of: [UTType.text.identifier], delegate: ItemDropDelegate(
                         dayId: day.id,
-                        position: sceneIndex,
+                        position: itemIndex,
                         dropTargetDayId: $dropTargetDayId,
                         dropTargetPosition: $dropTargetPosition,
-                        onDrop: { sceneId in handleSceneDrop(sceneId: sceneId, targetDayId: day.id, targetPosition: sceneIndex) }
+                        onDrop: { idList in handleItemDrop(idList: idList, targetDayId: day.id, targetPosition: itemIndex) }
                     ))
                 }
 
-                if shouldShowDropIndicator(dayId: day.id, position: day.scenes.count) {
+                if shouldShowDropIndicator(dayId: day.id, position: day.items.count) {
                     DropIndicatorView()
                 }
+            }
+
+            // Small, unobtrusive "+" to add a non-scene item — deliberately not in the date
+            // header row, which is already tight for space (see the header's own comments
+            // on how little room 95pt gives it).
+            Button {
+                newBannerLabel = ""
+                newBannerNote  = ""
+                newBannerTime  = ""
+                addingBannerToDayId = day.id
+            } label: {
+                HStack(spacing: 2) {
+                    Image(systemName: "plus.circle")
+                    Text("Item").lineLimit(1)
+                }
+                .font(.system(size: 8))
+                .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Add a non-scene item to this day — company move, safety meeting, pre-light, etc.")
+            .popover(isPresented: Binding(
+                get: { addingBannerToDayId == day.id },
+                set: { if !$0 { addingBannerToDayId = nil } }
+            )) {
+                bannerFormPopoverContent(dayId: day.id, editingBannerId: nil)
             }
 
             Spacer()
@@ -228,18 +291,89 @@ struct CompactMonthCalendarView: View {
         .cornerRadius(8)
         .onDrop(of: [UTType.text.identifier], delegate: CombinedDayDropDelegate(
             dayId: day.id,
-            scenes: day.scenes,
+            items: day.items,
             dropTargetDayId: $dropTargetDayId,
             dropTargetPosition: $dropTargetPosition,
             dayDropTargetId: $dayDropTargetId,
             draggingDayId: $draggingDayId,
-            onSceneDrop: { sceneId in
-                handleSceneDrop(sceneId: sceneId, targetDayId: day.id, targetPosition: day.scenes.count)
+            onItemDrop: { idList in
+                handleItemDrop(idList: idList, targetDayId: day.id, targetPosition: day.items.count)
             },
             onDayDrop: { sourceDayId in
                 handleDayRearrange(sourceDayId: sourceDayId, targetDayId: day.id)
             }
         ))
+    }
+
+    // MARK: - Add/Edit Item Popover
+
+    /// Shared by both the "+" control (editingBannerId nil — creating) and double-clicking
+    /// an existing item (editingBannerId set — editing), since the form itself is identical
+    /// either way; only the title, the primary button, and what happens on save differ.
+    @ViewBuilder
+    private func bannerFormPopoverContent(dayId: UUID, editingBannerId: UUID?) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(editingBannerId == nil ? "New Item" : "Edit Item").font(.headline)
+            TextField("Label (e.g. COMPANY MOVE)", text: $newBannerLabel)
+                .textFieldStyle(RoundedBorderTextFieldStyle())
+                .frame(width: 220)
+            TextField("Note (optional)", text: $newBannerNote)
+                .textFieldStyle(RoundedBorderTextFieldStyle())
+                .frame(width: 220)
+            VStack(alignment: .leading, spacing: 2) {
+                TextField(TimeParser.placeholderText, text: $newBannerTime)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .frame(width: 220)
+                if let hint = TimeParser.getInputHint(newBannerTime), !newBannerTime.isEmpty {
+                    Text(hint).font(.caption).foregroundColor(.secondary)
+                } else {
+                    Text("Estimated time (optional) — a company move or safety meeting doesn't always take the same amount of time")
+                        .font(.caption).foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(width: 220, alignment: .leading)
+                }
+            }
+            HStack {
+                if let editingBannerId {
+                    Button("Delete", role: .destructive) {
+                        removeBanner(id: editingBannerId, from: dayId)
+                        editingBanner = nil
+                    }
+                }
+                Spacer()
+                Button("Cancel") { addingBannerToDayId = nil; editingBanner = nil }
+                Button(editingBannerId == nil ? "Add" : "Save") {
+                    if let editingBannerId {
+                        updateBanner(id: editingBannerId, label: newBannerLabel, note: newBannerNote, time: newBannerTime, in: dayId)
+                        editingBanner = nil
+                    } else {
+                        addBanner(label: newBannerLabel, note: newBannerNote, time: newBannerTime, to: dayId)
+                        addingBannerToDayId = nil
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(newBannerLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(12)
+    }
+
+    private func beginEditBanner(_ banner: BannerItem, dayId: UUID) {
+        newBannerLabel = banner.label
+        newBannerNote  = banner.note
+        newBannerTime  = banner.estimatedTime > 0 ? editableTimeString(banner.estimatedTime) : ""
+        editingBanner  = (dayId: dayId, id: banner.id)
+    }
+
+    /// Converts a stored minute count back to a string TimeParser can parse again — mirrors
+    /// SceneEditSheet's formatMinutesForEditing, since a banner's time field is edited the
+    /// same way a scene's is.
+    private func editableTimeString(_ minutes: Int) -> String {
+        let hours = minutes / 60
+        let mins  = minutes % 60
+        if hours > 0 && mins > 0 { return "\(hours):\(String(format: "%02d", mins))" }
+        if hours > 0              { return "\(hours)" }
+        return "\(mins)"
     }
 
     // MARK: - Call Sheet Editor
@@ -315,30 +449,35 @@ struct CompactMonthCalendarView: View {
         dropTargetDayId == dayId && dropTargetPosition == position
     }
 
-    /// Accepts either a single scene ID or a comma-separated list of scene IDs (dragged
-    /// together from a Boneyard multi-selection) and inserts them, in order, starting at
-    /// targetPosition so a dragged group lands together as a block.
-    private func handleSceneDrop(sceneId: String, targetDayId: UUID, targetPosition: Int) {
-        let ids = sceneId.components(separatedBy: ",").compactMap { UUID(uuidString: $0) }
+    /// Accepts either a single item ID or a comma-separated list of IDs (dragged together
+    /// from a Boneyard multi-selection) and inserts them, in order, starting at
+    /// targetPosition — a position in the day's *full* items list, where scenes and
+    /// banners share one ordering, so a banner can be dragged above or below a scene the
+    /// same way two scenes can be reordered. Banners never appear in the Boneyard, so an ID
+    /// that isn't there is assumed to already be scheduled somewhere (the second loop below)
+    /// — true for both a scene being moved and a banner being moved, with no special-casing
+    /// needed for which kind of item it is.
+    private func handleItemDrop(idList: String, targetDayId: UUID, targetPosition: Int) {
+        let ids = idList.components(separatedBy: ",").compactMap { UUID(uuidString: $0) }
         guard !ids.isEmpty else { return }
 
         var insertPosition = targetPosition
         for uuid in ids {
-            // From Boneyard
+            // From Boneyard (scenes only — banners have no Boneyard equivalent)
             if let idx = allScenes.firstIndex(where: { $0.id == uuid }) {
                 let scene = allScenes.remove(at: idx)
-                insertSceneIntoDay(scene: scene, dayId: targetDayId, position: insertPosition)
+                insertItemIntoDay(item: .scene(scene), dayId: targetDayId, position: insertPosition)
                 insertPosition += 1
                 continue
             }
 
-            // From another (or same) day
+            // Already scheduled somewhere — a scene or a banner, on this day or another
             for dayIdx in shootDays.indices {
-                if let sceneIdx = shootDays[dayIdx].scenes.firstIndex(where: { $0.id == uuid }) {
-                    let scene = shootDays[dayIdx].scenes.remove(at: sceneIdx)
+                if let itemIdx = shootDays[dayIdx].items.firstIndex(where: { $0.id == uuid }) {
+                    let item = shootDays[dayIdx].items.remove(at: itemIdx)
                     var adjustedPos = insertPosition
-                    if shootDays[dayIdx].id == targetDayId && sceneIdx < insertPosition { adjustedPos -= 1 }
-                    insertSceneIntoDay(scene: scene, dayId: targetDayId, position: adjustedPos)
+                    if shootDays[dayIdx].id == targetDayId && itemIdx < insertPosition { adjustedPos -= 1 }
+                    insertItemIntoDay(item: item, dayId: targetDayId, position: adjustedPos)
                     insertPosition += 1
                     break
                 }
@@ -347,10 +486,47 @@ struct CompactMonthCalendarView: View {
         onSceneChanged()
     }
 
-    private func insertSceneIntoDay(scene: Scene, dayId: UUID, position: Int) {
+    private func insertItemIntoDay(item: DayItem, dayId: UUID, position: Int) {
         guard let dayIdx = shootDays.firstIndex(where: { $0.id == dayId }) else { return }
-        let clamped = min(max(0, position), shootDays[dayIdx].scenes.count)
-        shootDays[dayIdx].scenes.insert(scene, at: clamped)
+        let clamped = min(max(0, position), shootDays[dayIdx].items.count)
+        shootDays[dayIdx].items.insert(item, at: clamped)
+    }
+
+    // MARK: - Banner (non-scene item) CRUD
+
+    private func addBanner(label: String, note: String, time: String, to dayId: UUID) {
+        let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedLabel.isEmpty, let dayIdx = shootDays.firstIndex(where: { $0.id == dayId }) else { return }
+        let banner = BannerItem(
+            label: trimmedLabel,
+            note: note.trimmingCharacters(in: .whitespacesAndNewlines),
+            estimatedTime: TimeParser.parseToMinutes(time) ?? 0
+        )
+        shootDays[dayIdx].items.append(.banner(banner))
+        onSceneChanged()
+    }
+
+    private func removeBanner(id: UUID, from dayId: UUID) {
+        guard let dayIdx = shootDays.firstIndex(where: { $0.id == dayId }) else { return }
+        shootDays[dayIdx].items.removeAll { $0.id == id }
+        onSceneChanged()
+    }
+
+    /// Updates an existing banner's fields in place, preserving its id — a BannerItem's
+    /// own initializer always mints a fresh random id, so this edits the item found in the
+    /// array directly rather than constructing a replacement.
+    private func updateBanner(id: UUID, label: String, note: String, time: String, in dayId: UUID) {
+        let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedLabel.isEmpty,
+              let dayIdx = shootDays.firstIndex(where: { $0.id == dayId }),
+              let itemIdx = shootDays[dayIdx].items.firstIndex(where: { $0.id == id }),
+              case .banner(var banner) = shootDays[dayIdx].items[itemIdx]
+        else { return }
+        banner.label         = trimmedLabel
+        banner.note          = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        banner.estimatedTime = TimeParser.parseToMinutes(time) ?? 0
+        shootDays[dayIdx].items[itemIdx] = .banner(banner)
+        onSceneChanged()
     }
 
     // MARK: - Selection
@@ -420,19 +596,19 @@ struct CompactMonthCalendarView: View {
     /// preserving the order they're passed in, and clears them from the selection afterward.
     private func sendScenes(_ ids: [UUID], toDay targetDayId: UUID) {
         guard let targetIdx = shootDays.firstIndex(where: { $0.id == targetDayId }) else { return }
-        var insertPosition = shootDays[targetIdx].scenes.count
+        var insertPosition = shootDays[targetIdx].items.count
 
         for uuid in ids {
             if let idx = allScenes.firstIndex(where: { $0.id == uuid }) {
                 let scene = allScenes.remove(at: idx)
-                insertSceneIntoDay(scene: scene, dayId: targetDayId, position: insertPosition)
+                insertItemIntoDay(item: .scene(scene), dayId: targetDayId, position: insertPosition)
                 insertPosition += 1
                 continue
             }
             for dayIdx in shootDays.indices {
                 if let sceneIdx = shootDays[dayIdx].scenes.firstIndex(where: { $0.id == uuid }) {
                     let scene = shootDays[dayIdx].scenes.remove(at: sceneIdx)
-                    insertSceneIntoDay(scene: scene, dayId: targetDayId, position: insertPosition)
+                    insertItemIntoDay(item: .scene(scene), dayId: targetDayId, position: insertPosition)
                     insertPosition += 1
                     break
                 }
@@ -477,23 +653,26 @@ struct CompactMonthCalendarView: View {
     // MARK: - Day Rearrange
 
     /// Moves scenes and call sheet from sourceDayId to targetDayId.
-    /// If target has content, swaps both days' scenes and call sheet data.
-    /// The calendar dates themselves never change — only the content moves.
+    /// If target has content, swaps both days' items (scenes and banners together) and call
+    /// sheet data. The calendar dates themselves never change — only the content moves.
+    /// Swapping the full items list rather than just scenes matters now: swapping only
+    /// scenes would silently strand any banner on the day it started on, orphaned on the
+    /// wrong date after the scenes around it had already moved.
     private func handleDayRearrange(sourceDayId: UUID, targetDayId: UUID) {
         guard sourceDayId != targetDayId,
               let sourceIdx = shootDays.firstIndex(where: { $0.id == sourceDayId }),
               let targetIdx = shootDays.firstIndex(where: { $0.id == targetDayId })
         else { return }
 
-        // Swap scenes and call sheet, preserving both dates
-        let sourceScenes    = shootDays[sourceIdx].scenes
+        // Swap items and call sheet, preserving both dates
+        let sourceItems     = shootDays[sourceIdx].items
         let sourceCallSheet = shootDays[sourceIdx].callSheet
-        let targetScenes    = shootDays[targetIdx].scenes
+        let targetItems     = shootDays[targetIdx].items
         let targetCallSheet = shootDays[targetIdx].callSheet
 
-        shootDays[sourceIdx].scenes    = targetScenes
+        shootDays[sourceIdx].items     = targetItems
         shootDays[sourceIdx].callSheet = targetCallSheet
-        shootDays[targetIdx].scenes    = sourceScenes
+        shootDays[targetIdx].items     = sourceItems
         shootDays[targetIdx].callSheet = sourceCallSheet
 
         draggingDayId   = nil
@@ -509,7 +688,7 @@ struct SceneCardView: View {
     let dayId:      UUID
     let dayIndex:   Int
     let sceneIndex: Int
-    @Binding var interactingSceneId: UUID?
+    @Binding var interactingItemId: UUID?
     let isSelected:     Bool
     let selectionCount: Int
     let showCast:       Bool
@@ -522,7 +701,7 @@ struct SceneCardView: View {
     let onSelect:    () -> Void
     let onSendToDay: () -> Void
 
-    private var isDragging: Bool { interactingSceneId == scene.id }
+    private var isDragging: Bool { interactingItemId == scene.id }
     private var isMultiSelected: Bool { isSelected && selectionCount > 1 }
     /// A conflict (this scene's cast includes someone marked unavailable that day) takes
     /// visual priority over the normal Day/Night/Custom color — it's the more urgent thing
@@ -587,7 +766,7 @@ struct SceneCardView: View {
         .animation(.easeInOut(duration: 0.2), value: isDragging)
         .fastTooltip(scene.tooltipText)
         .onDrag {
-            interactingSceneId = scene.id
+            interactingItemId = scene.id
             onDragStart()
             return NSItemProvider(object: scene.id.uuidString as NSString)
         } preview: {
@@ -602,19 +781,114 @@ struct SceneCardView: View {
                     .shadow(radius: 4)
             )
         }
-        .simultaneousGesture(TapGesture(count: 2).onEnded { interactingSceneId = nil; onEdit() })
-        .simultaneousGesture(TapGesture(count: 1).onEnded { interactingSceneId = nil; onSelect() })
+        .simultaneousGesture(TapGesture(count: 2).onEnded { interactingItemId = nil; onEdit() })
+        .simultaneousGesture(TapGesture(count: 1).onEnded { interactingItemId = nil; onSelect() })
         .contextMenu {
-            Button("Edit Scene") { interactingSceneId = nil; onEdit() }
+            Button("Edit Scene") { interactingItemId = nil; onEdit() }
 
             Button(isMultiSelected ? "Remove \(selectionCount) Scenes from Day" : "Remove from Day") {
-                interactingSceneId = nil; onRemove()
+                interactingItemId = nil; onRemove()
             }
             Divider()
-            Button("Duplicate Scene") { interactingSceneId = nil; onDuplicate() }
+            Button("Duplicate Scene") { interactingItemId = nil; onDuplicate() }
             Divider()
             Button(isMultiSelected ? "Send \(selectionCount) Scenes to Day…" : "Send to Day…") {
-                interactingSceneId = nil; onSendToDay()
+                interactingItemId = nil; onSendToDay()
+            }
+        }
+        .onChange(of: isDragging) { _, dragging in
+            if !dragging { onDragEnd() }
+        }
+    }
+}
+
+// MARK: - BannerCardView
+
+/// A lightweight, visually distinct card for a non-scene day item — a company move, a
+/// safety meeting, pre-lighting, and so on. No page count, no cast, no day/night color —
+/// just a label and an optional note, with a dashed border and a flag icon instead of a
+/// solid one, so it reads as a note rather than a shootable scene. Matches how a real call
+/// sheet renders one of these: a single bold banner line, not a scene row — see
+/// CALLSHEET_LAYOUT.md §3.2.
+struct BannerCardView: View {
+    let banner: BannerItem
+    @Binding var interactingItemId: UUID?
+    let onEdit:      () -> Void
+    let onDelete:    () -> Void
+    let onDragStart: () -> Void
+    let onDragEnd:   () -> Void
+
+    private var isDragging: Bool { interactingItemId == banner.id }
+
+    // Label and time share one line instead of each getting their own — a scene card is
+    // already at minimum two lines (title, then duration/time), so keeping this to one
+    // line, most of the time, is what makes a banner noticeably *smaller* than a scene
+    // rather than larger. The note isn't shown inline at all; it's in the hover tooltip
+    // instead, the same place a scene's cast/summary detail lives.
+    private var displayText: String {
+        let label = banner.label.isEmpty ? "UNTITLED ITEM" : banner.label.uppercased()
+        guard banner.estimatedTime > 0 else { return label }
+        return "\(label)  ·  \(formattedTime(banner.estimatedTime))"
+    }
+
+    private var tooltipText: String {
+        var lines: [String] = [banner.label.isEmpty ? "Untitled item" : banner.label]
+        if banner.estimatedTime > 0 {
+            lines.append("Est: \(formattedTime(banner.estimatedTime))")
+        }
+        if !banner.note.isEmpty {
+            lines.append(banner.note)
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "flag.fill")
+                .font(.system(size: 7))
+                .foregroundColor(.secondary)
+            Text(displayText)
+                .font(.caption2).fontWeight(.bold)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(4)
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(Color.secondary.opacity(isDragging ? 0.30 : 0.16))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .strokeBorder(style: StrokeStyle(lineWidth: isDragging ? 2 : 1, dash: [3, 2]))
+                        .foregroundColor(.secondary.opacity(isDragging ? 0.9 : 0.5))
+                )
+        )
+        .scaleEffect(isDragging ? 1.05 : 1.0)
+        .opacity(isDragging ? 0.8 : 1.0)
+        .animation(.easeInOut(duration: 0.2), value: isDragging)
+        .fastTooltip(tooltipText)
+        .onDrag {
+            interactingItemId = banner.id
+            onDragStart()
+            return NSItemProvider(object: banner.id.uuidString as NSString)
+        } preview: {
+            HStack(spacing: 4) {
+                Image(systemName: "flag.fill").font(.caption2).foregroundColor(.secondary)
+                Text(banner.label).font(.caption).fontWeight(.semibold)
+            }
+            .padding(8)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color(NSColor.controlBackgroundColor))
+                    .shadow(radius: 4)
+            )
+        }
+        .simultaneousGesture(TapGesture(count: 2).onEnded { interactingItemId = nil; onEdit() })
+        .contextMenu {
+            Button("Edit Item") { interactingItemId = nil; onEdit() }
+            Button("Delete Item", role: .destructive) {
+                interactingItemId = nil
+                onDelete()
             }
         }
         .onChange(of: isDragging) { _, dragging in
@@ -637,9 +911,11 @@ struct DropIndicatorView: View {
     }
 }
 
-// MARK: - SceneDropDelegate
+// MARK: - ItemDropDelegate
 
-struct SceneDropDelegate: DropDelegate {
+/// Handles dropping a scene or a banner onto a specific slot in a day's items list — the
+/// same delegate for both, since from here it's just "a dragged ID landed at this position."
+struct ItemDropDelegate: DropDelegate {
     let dayId:    UUID
     let position: Int
     @Binding var dropTargetDayId:   UUID?
@@ -677,13 +953,13 @@ struct SceneDropDelegate: DropDelegate {
 
 struct CombinedDayDropDelegate: DropDelegate {
     let dayId:    UUID
-    let scenes:   [Scene]
+    let items:    [DayItem]
     @Binding var dropTargetDayId:    UUID?
     @Binding var dropTargetPosition: Int?
     @Binding var dayDropTargetId:    UUID?
     @Binding var draggingDayId:      UUID?
-    let onSceneDrop: (String) -> Void
-    let onDayDrop:   (UUID)   -> Void
+    let onItemDrop: (String) -> Void
+    let onDayDrop:  (UUID)   -> Void
 
     func validateDrop(info: DropInfo) -> Bool {
         info.hasItemsConforming(to: [UTType.text.identifier])
@@ -692,10 +968,10 @@ struct CombinedDayDropDelegate: DropDelegate {
     func dropEntered(info: DropInfo) {
         // Peek at the identifier to decide which highlight to show
         // We can't read the value synchronously, so we show day highlight
-        // if draggingDayId is set, scene highlight otherwise
+        // if draggingDayId is set, item highlight otherwise
         if draggingDayId != nil {
             dayDropTargetId = dayId
-        } else if scenes.isEmpty {
+        } else if items.isEmpty {
             dropTargetDayId  = dayId
             dropTargetPosition = 0
         }
@@ -724,7 +1000,7 @@ struct CombinedDayDropDelegate: DropDelegate {
                    let uuid = UUID(uuidString: String(idString.dropFirst(4))) {
                     onDayDrop(uuid)
                 } else {
-                    onSceneDrop(idString)
+                    onItemDrop(idString)
                 }
             }
         }

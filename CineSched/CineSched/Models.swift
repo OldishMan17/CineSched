@@ -315,11 +315,14 @@ struct CastMember: Identifiable, Codable, Hashable {
 // MARK: - Scene tooltip
 
 extension Scene {
-    /// Hover-tooltip text combining cast and summary — shown via the native macOS tooltip
-    /// (`.help()`) in both the Boneyard and the calendar, which already has the ~1-2 second
-    /// hover delay built in.
+    /// Hover-tooltip text combining the scene's quick facts, cast, and summary — shown via
+    /// the app's own faster tooltip (`.fastTooltip`, see HoverTooltip.swift) in both the
+    /// Boneyard and the calendar.
     var tooltipText: String {
-        var lines: [String] = [title]
+        let titleLine = sceneNumber.isEmpty ? title : "\(sceneNumber) \(title)"
+        var lines: [String] = [titleLine]
+        lines.append("Pages: \(FractionParser.formatEighths(duration))")
+        lines.append("Est: \(formattedTime(estimatedTime))")
         if !cast.isEmpty {
             lines.append("Cast: " + cast.joined(separator: ", "))
         }
@@ -361,17 +364,34 @@ struct ProductionInfo: Codable, Equatable {
 /// safety meeting, pre-lighting, a production meeting. Deliberately lightweight compared to
 /// Scene: a call sheet renders one of these as a single bold banner line spanning the whole
 /// table width, not a full scene row — see CALLSHEET_LAYOUT.md §3.2 and
-/// CALLSHEET_SPEC.md §2.4. There's no UI yet to create one; this just gets the data model
-/// ready for that.
+/// CALLSHEET_SPEC.md §2.4.
 struct BannerItem: Identifiable, Codable, Hashable {
     let id: UUID
     var label: String
     var note: String
+    // Minutes. Not every company move, safety meeting, or pre-light takes the same amount
+    // of time, so this is a per-item estimate the same way a scene has one — it counts
+    // toward the day's total estimated time alongside scenes' own estimates.
+    var estimatedTime: Int
 
-    init(label: String = "", note: String = "") {
-        self.id    = UUID()
-        self.label = label
-        self.note  = note
+    init(label: String = "", note: String = "", estimatedTime: Int = 0) {
+        self.id            = UUID()
+        self.label         = label
+        self.note          = note
+        self.estimatedTime = estimatedTime
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, label, note, estimatedTime
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id            = try c.decode(UUID.self,   forKey: .id)
+        label         = try c.decode(String.self, forKey: .label)
+        note          = try c.decodeIfPresent(String.self, forKey: .note) ?? ""
+        // Absent on a banner saved in the brief window before this field existed.
+        estimatedTime = try c.decodeIfPresent(Int.self, forKey: .estimatedTime) ?? 0
     }
 }
 
@@ -503,8 +523,23 @@ struct ShootDay: Identifiable, Codable {
         }
     }
 
-    var totalDuration:      Int { scenes.reduce(0) { $0 + $1.duration } }
-    var totalEstimatedTime: Int { scenes.reduce(0) { $0 + $1.estimatedTime } }
+    /// A view of just the banner entries, in order — read-only; banners are added/removed/
+    /// reordered through `items` directly (see CalendarView.swift), since unlike scenes
+    /// there's no legacy call site expecting a plain settable array of them.
+    var banners: [BannerItem] {
+        items.compactMap {
+            if case .banner(let banner) = $0 { return banner }
+            return nil
+        }
+    }
+
+    // Pages only ever come from scenes — a banner isn't shootable, so it has no page count.
+    var totalDuration: Int { scenes.reduce(0) { $0 + $1.duration } }
+    // Time, unlike pages, includes banners too: a company move or safety meeting takes real
+    // time out of the day just like a scene does, so it belongs in the day's total.
+    var totalEstimatedTime: Int {
+        scenes.reduce(0) { $0 + $1.estimatedTime } + banners.reduce(0) { $0 + $1.estimatedTime }
+    }
 
     var dayScenes:    [Scene] { scenes.filter { $0.dayNightType == .day } }
     var nightScenes:  [Scene] { scenes.filter { $0.dayNightType == .night } }

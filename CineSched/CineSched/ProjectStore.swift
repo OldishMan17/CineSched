@@ -393,7 +393,8 @@ extension ContentView {
             projectTitle: projectTitle,
             allScenes: allScenes,
             startDate: startDate,
-            endDate: endDate
+            endDate: endDate,
+            useColor: exportPDFInColor
         ) else {
             alertMessage = "Failed to generate schedule PDF."
             showingAlert = true

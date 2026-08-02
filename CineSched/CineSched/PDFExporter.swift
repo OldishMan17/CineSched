@@ -9,17 +9,30 @@ import UniformTypeIdentifiers
 
 class PDFExporter {
 
+    // MARK: Fonts (shared between measurement and drawing so the two can never disagree)
+
+    private static let sceneNumberFont = NSFont.boldSystemFont(ofSize: 8)
+    private static let sceneTitleFont  = NSFont.systemFont(ofSize: 8)
+    private static let sceneMetaFont   = NSFont.systemFont(ofSize: 7.5)
+    private static let bannerFont      = NSFont.boldSystemFont(ofSize: 7.5)
+    private static let bannerMetaFont  = NSFont.systemFont(ofSize: 7)
+    private static let bannerNoteFont  = NSFont.systemFont(ofSize: 6.5)
+    private static let castFont        = NSFont.systemFont(ofSize: 7)
+
     static func generatePDF(
         shootDays: [ShootDay],
         projectTitle: String,
         allScenes: [Scene],
         startDate: Date,
-        endDate: Date
+        endDate: Date,
+        useColor: Bool = false
     ) -> Data? {
 
         let pageWidth:  CGFloat = 792   // US Letter landscape
         let pageHeight: CGFloat = 612
-        let margin:     CGFloat = 40
+        // Tightened from 40 — gives every day column a little more usable width, on top of
+        // scene/banner text now wrapping instead of truncating.
+        let margin:     CGFloat = 30
 
         let contentRect = CGRect(
             x: margin, y: margin,
@@ -33,8 +46,8 @@ class PDFExporter {
         guard let context = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else { return nil }
 
         let weeks      = groupDaysIntoWeeks(shootDays)
-        let rowHeights = calculateIdealRowHeights(weeks: weeks)
         let cellWidth  = contentRect.width / 7
+        let rowHeights = calculateIdealRowHeights(weeks: weeks, cellWidth: cellWidth)
 
         var pageNumber = 0
         var weekIndex  = 0
@@ -82,7 +95,7 @@ class PDFExporter {
                     width: contentRect.width,
                     height: rowHeight
                 )
-                drawWeekRow(week: weeks[weekIndex], in: rowRect, cellWidth: cellWidth)
+                drawWeekRow(week: weeks[weekIndex], in: rowRect, cellWidth: cellWidth, useColor: useColor)
                 currentY -= rowHeight
                 horizontalLines.append(currentY)
                 weekIndex += 1
@@ -129,18 +142,185 @@ class PDFExporter {
             .draw(in: CGRect(x: rect.minX, y: rect.maxY - 50, width: rect.width, height: 20))
     }
 
-    private static func calculateIdealRowHeights(weeks: [[ShootDay?]]) -> [CGFloat] {
-        let minHeight: CGFloat = 50
-        let maxHeight: CGFloat = 160
+    // MARK: - Item line model
+    //
+    // Building one shared "what does this item look like" representation and reusing it for
+    // both the row-height measurement pass and the actual drawing pass is what guarantees
+    // the two can never disagree — there's no separate "estimate the height" formula that
+    // could drift out of sync with what actually gets drawn.
 
-        return weeks.map { week in
-            let maxScenes     = week.compactMap { $0 }.map(\.scenes.count).max() ?? 0
-            let contentHeight = 40 + CGFloat(maxScenes) * 11
-            return min(max(contentHeight + 20, minHeight), maxHeight)
+    private struct ItemLine {
+        let text: NSAttributedString
+        let referenceFont: NSFont   // for single-line-height purposes when text has mixed runs
+        let maxLines: Int
+    }
+
+    private static func lineHeight(for font: NSFont) -> CGFloat {
+        font.ascender - font.descender + font.leading
+    }
+
+    /// Height needed to draw `line` wrapped within `maxWidth`, capped at its maxLines.
+    private static func wrappedHeight(_ line: ItemLine, maxWidth: CGFloat) -> CGFloat {
+        let single = lineHeight(for: line.referenceFont)
+        guard maxWidth > 0 else { return single }
+        let unbounded = line.text.boundingRect(
+            with: CGSize(width: maxWidth, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading]
+        ).height
+        // Generous headroom above the naive "maxLines × one line" estimate: CoreText's real
+        // line spacing (used by both boundingRect and draw(with:)) doesn't land exactly on
+        // font-metrics arithmetic, and a cap that's even a fraction of a point too tight
+        // silently truncates text that should have fit in exactly maxLines lines.
+        let cap = CGFloat(line.maxLines) * single * 1.3 + 4
+        return min(max(unbounded, single), cap)
+    }
+
+    private static func totalHeight(of lines: [ItemLine], maxWidth: CGFloat) -> CGFloat {
+        lines.reduce(0) { $0 + wrappedHeight($1, maxWidth: maxWidth) }
+    }
+
+    /// The printable lines for one day item — a scene gets one wrapping line combining its
+    /// number, title, and (pages, est. time) inline; a banner gets a bold label line (with
+    /// its own est. time, if set) and an optional note line beneath.
+    private static func itemLines(for item: DayItem) -> [ItemLine] {
+        switch item {
+        case .scene(let scene):
+            let combined = NSMutableAttributedString()
+            if !scene.sceneNumber.isEmpty {
+                combined.append(NSAttributedString(
+                    string: "\(scene.sceneNumber)  ",
+                    attributes: [.font: sceneNumberFont, .foregroundColor: NSColor.black]
+                ))
+            }
+            combined.append(NSAttributedString(
+                string: scene.title,
+                attributes: [.font: sceneTitleFont, .foregroundColor: NSColor.black]
+            ))
+            combined.append(NSAttributedString(
+                string: "  (\(formattedEighths(scene.duration)), \(formattedTime(scene.estimatedTime)))",
+                attributes: [.font: sceneMetaFont, .foregroundColor: NSColor.darkGray]
+            ))
+            // 3 lines, not 2 — an unusually long title can otherwise wrap far enough that
+            // the trailing "(pages, time)" never makes it onto a visible line at all.
+            return [ItemLine(text: combined, referenceFont: sceneTitleFont, maxLines: 3)]
+
+        case .banner(let banner):
+            var lines: [ItemLine] = []
+            let label = banner.label.trimmingCharacters(in: .whitespacesAndNewlines)
+            let labelLine = NSMutableAttributedString(
+                string: label.isEmpty ? "ITEM" : label.uppercased(),
+                attributes: [.font: bannerFont, .foregroundColor: NSColor(white: 0.2, alpha: 1)]
+            )
+            if banner.estimatedTime > 0 {
+                labelLine.append(NSAttributedString(
+                    string: "  (\(formattedTime(banner.estimatedTime)))",
+                    attributes: [.font: bannerMetaFont, .foregroundColor: NSColor.darkGray]
+                ))
+            }
+            lines.append(ItemLine(text: labelLine, referenceFont: bannerFont, maxLines: 2))
+
+            let note = banner.note.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !note.isEmpty {
+                lines.append(ItemLine(
+                    text: NSAttributedString(string: note, attributes: [
+                        .font: bannerNoteFont, .foregroundColor: NSColor.darkGray
+                    ]),
+                    referenceFont: bannerNoteFont,
+                    maxLines: 2
+                ))
+            }
+            return lines
         }
     }
 
-    private static func drawWeekRow(week: [ShootDay?], in rowRect: CGRect, cellWidth: CGFloat) {
+    /// A banner's fill/border — light gray with a dashed outline, no day/night color, so it
+    /// reads as a note rather than something shootable — matches the dashed-border treatment
+    /// BannerCardView uses inline on the calendar itself (see CalendarView.swift).
+    private static func drawItemBackground(item: DayItem, in boxRect: CGRect, useColor: Bool) {
+        switch item {
+        case .scene(let scene):
+            let path = NSBezierPath(roundedRect: boxRect, xRadius: 2, yRadius: 2)
+            if useColor {
+                nsColor(for: scene.dayNightType).withAlphaComponent(0.16).setFill()
+            } else {
+                (scene.dayNightType == .night ? NSColor(white: 0.9, alpha: 1.0) : NSColor.white).setFill()
+            }
+            path.fill()
+            path.lineWidth = 0.5
+            (useColor ? nsColor(for: scene.dayNightType) : NSColor.lightGray).setStroke()
+            path.stroke()
+
+        case .banner:
+            let path = NSBezierPath(roundedRect: boxRect, xRadius: 2, yRadius: 2)
+            NSColor(white: 0.93, alpha: 1.0).setFill()
+            path.fill()
+            let dashed = NSBezierPath(roundedRect: boxRect, xRadius: 2, yRadius: 2)
+            dashed.lineWidth = 0.6
+            dashed.setLineDash([2, 1.5], count: 2, phase: 0)
+            NSColor(white: 0.4, alpha: 1.0).setStroke()
+            dashed.stroke()
+        }
+    }
+
+    /// Bridges a scene's SwiftUI day/night color into AppKit for the color export option —
+    /// same colors the app itself already uses (orange/blue/green), so a color export reads
+    /// consistently with what's on screen.
+    private static func nsColor(for type: DayNightType) -> NSColor {
+        NSColor(type.color)
+    }
+
+    // MARK: - Row height
+
+    private static func calculateIdealRowHeights(weeks: [[ShootDay?]], cellWidth: CGFloat) -> [CGFloat] {
+        let minHeight: CGFloat = 50
+        // Deliberately no upper cap: a row is always sized to what its busiest day actually
+        // needs. Clamping this to a fixed maximum used to silently clip content shorter than
+        // what drawDay would then try to draw into it, causing the day's totals to overlap
+        // its last item on a busy day. If a day is unusually packed, the row just ends up
+        // tall — the page-break logic below already handles giving an oversized row its own
+        // page when it doesn't fit under the current one.
+        let padding: CGFloat = 6
+        let innerWidth = cellWidth - 2 * padding - 6   // minus cell padding and text inset
+
+        return weeks.map { week in
+            let contentHeight = week.compactMap { $0 }.map { day -> CGFloat in
+                dayContentHeight(day: day, innerWidth: innerWidth)
+            }.max() ?? 40
+            return max(contentHeight + 20, minHeight)
+        }
+    }
+
+    /// Everything that stacks vertically in one day cell: date header, cast summary (if
+    /// any), every item's wrapped height, and the totals block (if there's any content).
+    /// Used both to decide how tall a week's row needs to be and, implicitly, to draw within
+    /// exactly that space — see dayContentHeight's use in both calculateIdealRowHeights and
+    /// its mirror layout in drawDay.
+    private static func dayContentHeight(day: ShootDay, innerWidth: CGFloat) -> CGFloat {
+        var total: CGFloat = 16   // date header
+
+        let cast = day.allCast
+        if !cast.isEmpty {
+            let castLine = ItemLine(
+                text: NSAttributedString(string: "Cast: " + cast.joined(separator: ", "), attributes: [.font: castFont]),
+                referenceFont: castFont,
+                maxLines: 2
+            )
+            total += wrappedHeight(castLine, maxWidth: innerWidth) + 2
+        }
+
+        for item in day.items {
+            // +4 for the box's own top/bottom padding, +1 to match the inter-item gap
+            // drawDay actually leaves between boxes (yOffset += boxHeight + 1) — this was
+            // previously missing here, which under-reserved the row's height by 1pt per
+            // item and let the last item's box run into the totals text below it.
+            total += totalHeight(of: itemLines(for: item), maxWidth: innerWidth) + 4 + 1
+        }
+
+        if !day.items.isEmpty { total += 20 }   // totals block
+        return total
+    }
+
+    private static func drawWeekRow(week: [ShootDay?], in rowRect: CGRect, cellWidth: CGFloat, useColor: Bool) {
         for (col, day) in week.enumerated() {
             let cellRect = CGRect(
                 x: rowRect.minX + CGFloat(col) * cellWidth,
@@ -148,7 +328,7 @@ class PDFExporter {
                 width: cellWidth,
                 height: rowRect.height
             )
-            if let day = day { drawDay(day: day, in: cellRect) }
+            if let day = day { drawDay(day: day, in: cellRect, useColor: useColor) }
         }
     }
 
@@ -181,13 +361,15 @@ class PDFExporter {
         path.stroke()
     }
 
-    private static func drawDay(day: ShootDay, in rect: CGRect) {
-        let padding = CGFloat(8)
+    private static func drawDay(day: ShootDay, in rect: CGRect, useColor: Bool) {
+        // Tightened from 8 — reclaims a little more width for scene/banner text.
+        let padding = CGFloat(6)
         let content = CGRect(
             x: rect.minX + padding, y: rect.minY + padding,
             width:  rect.width  - 2 * padding,
             height: rect.height - 2 * padding
         )
+        let innerWidth = content.width - 6   // text inset within each item's box
 
         // Date header (top of cell)
         let dateFormatter = DateFormatter()
@@ -199,19 +381,32 @@ class PDFExporter {
         NSAttributedString(string: dateFormatter.string(from: day.date), attributes: dateAttr)
             .draw(in: CGRect(x: content.minX, y: content.maxY - 12, width: content.width, height: 12))
 
-        // Scene strips
-        let boxHeight:     CGFloat = 11
-        let paragraphStyle         = NSMutableParagraphStyle()
-        paragraphStyle.lineBreakMode = .byTruncatingTail
-
-        let sceneAttr: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 8),
-            .foregroundColor: NSColor.black,
-            .paragraphStyle: paragraphStyle
-        ]
-
         var yOffset: CGFloat = 16
-        for scene in day.scenes {
+
+        // Cast summary — every character appearing anywhere in the day's scenes, deduplicated
+        // and listed once, the way a real call sheet answers "who's needed today" rather than
+        // repeating cast per scene.
+        let cast = day.allCast
+        if !cast.isEmpty {
+            let castLine = ItemLine(
+                text: NSAttributedString(
+                    string: "Cast: " + cast.joined(separator: ", "),
+                    attributes: [.font: castFont, .foregroundColor: NSColor.darkGray]
+                ),
+                referenceFont: castFont,
+                maxLines: 2
+            )
+            let h = wrappedHeight(castLine, maxWidth: innerWidth)
+            let boxRect = CGRect(x: content.minX, y: content.maxY - yOffset - h, width: content.width, height: h)
+            castLine.text.draw(with: boxRect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+            yOffset += h + 2
+        }
+
+        // Items — scenes and banners together, in the day's actual schedule order, each
+        // wrapping instead of truncating so titles and scene numbers aren't cut off.
+        for item in day.items {
+            let lines = itemLines(for: item)
+            let boxHeight = totalHeight(of: lines, maxWidth: innerWidth) + 4
             let boxRect = CGRect(
                 x: content.minX,
                 y: content.maxY - yOffset - boxHeight,
@@ -219,29 +414,22 @@ class PDFExporter {
                 height: boxHeight
             )
 
-            let boxPath = NSBezierPath(roundedRect: boxRect, xRadius: 2, yRadius: 2)
-            (scene.dayNightType == .night
-                ? NSColor(white: 0.9, alpha: 1.0)
-                : NSColor.white).setFill()
-            boxPath.fill()
-            NSColor.lightGray.setStroke()
-            boxPath.lineWidth = 0.5
-            boxPath.stroke()
+            drawItemBackground(item: item, in: boxRect, useColor: useColor)
 
-            let attrStr    = NSAttributedString(string: scene.title, attributes: sceneAttr)
-            let textHeight = attrStr.size().height
-            let textRect   = CGRect(
-                x: content.minX + 3,
-                y: content.maxY - yOffset - boxHeight + (boxHeight - textHeight) / 2,
-                width: content.width - 6,
-                height: textHeight
-            )
-            attrStr.draw(in: textRect)
-            yOffset += boxHeight
+            var lineY = boxRect.maxY - 2
+            for line in lines {
+                let h = wrappedHeight(line, maxWidth: innerWidth)
+                let textRect = CGRect(x: boxRect.minX + 3, y: lineY - h, width: boxRect.width - 6, height: h)
+                line.text.draw(with: textRect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+                lineY -= h
+            }
+
+            yOffset += boxHeight + 1
         }
 
-        // Totals at bottom
-        if !day.scenes.isEmpty {
+        // Totals at bottom — gated on items rather than scenes alone, since a banner's
+        // estimated time now counts toward the day's total time even on a day with no scenes.
+        if !day.items.isEmpty {
             let totalAttr: [NSAttributedString.Key: Any] = [
                 .font: NSFont.systemFont(ofSize: 7),
                 .foregroundColor: NSColor.gray
