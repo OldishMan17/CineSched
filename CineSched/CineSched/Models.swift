@@ -265,6 +265,103 @@ struct ContactMethod: Identifiable, Codable, Hashable {
     }
 }
 
+// MARK: - Department
+
+/// Which named department a crew member belongs to, using the traditional call-sheet
+/// department order (CALLSHEET_SPEC.md §2.8) — a plain String rather than free text so the
+/// crew list can be grouped and sorted consistently. `.other` covers a real department not
+/// on that list (paired with free text in Department below); `.none` is for small
+/// productions where forcing everyone into a single department doesn't reflect reality —
+/// it's the default for a brand new crew member, not something that has to be chosen.
+enum DepartmentKind: String, Codable, CaseIterable {
+    case none
+    case production, assistantDirectors, scriptSupervisor, camera, grips, electricLX, sound,
+         artDepartment, setDecoration, props, construction, paint, costumes, makeup, makeupFX,
+         hair, spfx, vfx, stunts, transportation, locations, catering, craftServiceFirstAid,
+         accounting, castingExtrasCasting, postProductionEditorial, security, composer,
+         additionalLabour
+    case other
+
+    var displayName: String {
+        switch self {
+        case .none:                     return "None"
+        case .production:               return "Production"
+        case .assistantDirectors:       return "Assistant Directors"
+        case .scriptSupervisor:         return "Script Supervisor"
+        case .camera:                   return "Camera"
+        case .grips:                    return "Grips"
+        case .electricLX:               return "Electric/LX"
+        case .sound:                    return "Sound"
+        case .artDepartment:            return "Art Department"
+        case .setDecoration:            return "Set Decoration"
+        case .props:                    return "Props"
+        case .construction:             return "Construction"
+        case .paint:                    return "Paint"
+        case .costumes:                 return "Costumes"
+        case .makeup:                   return "Makeup"
+        case .makeupFX:                 return "Makeup FX"
+        case .hair:                     return "Hair"
+        case .spfx:                     return "SPFX"
+        case .vfx:                      return "VFX"
+        case .stunts:                   return "Stunts"
+        case .transportation:           return "Transportation"
+        case .locations:                return "Locations"
+        case .catering:                 return "Catering"
+        case .craftServiceFirstAid:     return "Craft Service/First Aid"
+        case .accounting:               return "Accounting"
+        case .castingExtrasCasting:     return "Casting/Extras Casting"
+        case .postProductionEditorial:  return "Post Production/Editorial"
+        case .security:                 return "Security"
+        case .composer:                 return "Composer"
+        case .additionalLabour:         return "Additional Labour"
+        case .other:                    return "Other"
+        }
+    }
+
+    /// Traditional call-sheet department order, for grouping/sorting the crew list and the
+    /// contact sheet's crew section. "Other" sorts right after the named departments;
+    /// "None" sorts separately, last of all, rather than interleaved among real departments.
+    static let sortOrder: [DepartmentKind] = [
+        .production, .assistantDirectors, .scriptSupervisor, .camera, .grips, .electricLX,
+        .sound, .artDepartment, .setDecoration, .props, .construction, .paint, .costumes,
+        .makeup, .makeupFX, .hair, .spfx, .vfx, .stunts, .transportation, .locations,
+        .catering, .craftServiceFirstAid, .accounting, .castingExtrasCasting,
+        .postProductionEditorial, .security, .composer, .additionalLabour, .other, .none
+    ]
+
+    var sortIndex: Int {
+        DepartmentKind.sortOrder.firstIndex(of: self) ?? DepartmentKind.sortOrder.count
+    }
+
+    /// Picker order: None first (it's the default, and the common case for a small crew),
+    /// then the named departments in call-sheet order, then Other last as a catch-all.
+    static let pickerOrder: [DepartmentKind] = [.none] + sortOrder.filter { $0 != .none }
+}
+
+/// A crew member's department — `kind` drives grouping/sorting; `otherText` only means
+/// anything when `kind == .other`, holding the free-typed department name.
+struct Department: Codable, Hashable {
+    var kind:      DepartmentKind
+    var otherText: String
+
+    static let none = Department(kind: .none, otherText: "")
+
+    init(kind: DepartmentKind = .none, otherText: String = "") {
+        self.kind      = kind
+        self.otherText = otherText
+    }
+
+    var displayName: String {
+        if kind == .other {
+            let trimmed = otherText.trimmingCharacters(in: .whitespaces)
+            return trimmed.isEmpty ? "Other" : trimmed
+        }
+        return kind.displayName
+    }
+
+    var sortIndex: Int { kind.sortIndex }
+}
+
 // MARK: - CrewMember
 
 struct CrewMember: Identifiable, Codable, Hashable {
@@ -273,17 +370,25 @@ struct CrewMember: Identifiable, Codable, Hashable {
     var role:           String
     var isDailyDefault: Bool
     var contacts:       [ContactMethod]
+    var department:     Department
 
-    init(name: String = "", role: String = "", isDailyDefault: Bool = false, contacts: [ContactMethod] = []) {
+    init(
+        name: String = "",
+        role: String = "",
+        isDailyDefault: Bool = false,
+        contacts: [ContactMethod] = [],
+        department: Department = .none
+    ) {
         self.id             = UUID()
         self.name           = name
         self.role           = role
         self.isDailyDefault = isDailyDefault
         self.contacts       = contacts
+        self.department     = department
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, role, isDailyDefault, contacts
+        case id, name, role, isDailyDefault, contacts, department
     }
 
     init(from decoder: Decoder) throws {
@@ -295,6 +400,9 @@ struct CrewMember: Identifiable, Codable, Hashable {
         // Absent on any crew member saved before contacts existed — no prior field held
         // phone/email at all, so there's nothing to migrate from, just an empty list.
         contacts       = try c.decodeIfPresent([ContactMethod].self, forKey: .contacts) ?? []
+        // Absent on any crew member saved before department existed — defaults to None,
+        // exactly like a brand new crew member, rather than forcing a guess.
+        department     = try c.decodeIfPresent(Department.self, forKey: .department) ?? .none
     }
 
     var displayString: String {

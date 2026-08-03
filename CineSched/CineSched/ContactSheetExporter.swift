@@ -89,21 +89,29 @@ class ContactSheetExporter {
             drawPeopleTable(y: yy, rows: castRows, emptyMessage: "No cast added.")
         }
 
-        let crewRows = productionInfo.crew
-            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-            .map {
-                ContactRow(
-                    name: $0.name.isEmpty ? "—" : $0.name,
-                    roleOrCharacter: $0.role,
-                    phone: $0.primaryPhone ?? "",
-                    email: $0.primaryEmail ?? ""
+        // Grouped by department, in the same traditional call-sheet order Production Setup
+        // groups by (DepartmentKind.sortOrder — None last, separately from named
+        // departments), alphabetical by name within each group.
+        let crewByDepartment = Dictionary(grouping: productionInfo.crew) { $0.department.kind }
+        let crewGroups: [(department: DepartmentKind, rows: [ContactRow])] = crewByDepartment
+            .map { kind, members in
+                (
+                    department: kind,
+                    rows: members
+                        .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+                        .map {
+                            ContactRow(
+                                name: $0.name.isEmpty ? "—" : $0.name,
+                                roleOrCharacter: $0.role,
+                                phone: $0.primaryPhone ?? "",
+                                email: $0.primaryEmail ?? ""
+                            )
+                        }
                 )
             }
-        // No department grouping — there's no department field anywhere in the app today
-        // (CrewMember only has a free-text `role`), so this doesn't invent one; crew is
-        // just one alphabetical list, same as cast.
+            .sorted { $0.department.sortIndex < $1.department.sortIndex }
         _ = drawSection(y: y, title: "CREW", columnLabels: ("NAME", "ROLE")) { yy in
-            drawPeopleTable(y: yy, rows: crewRows, emptyMessage: "No crew added.")
+            drawGroupedPeopleTable(y: yy, groups: crewGroups, emptyMessage: "No crew added.")
         }
 
         NSGraphicsContext.restoreGraphicsState()
@@ -206,6 +214,39 @@ class ContactSheetExporter {
             drawTextInline(row.phone.isEmpty ? "—" : row.phone, font: fontBody, color: colorDark, x: col3.x, y: y - 11, width: col3.w - 4)
             drawTextInline(row.email.isEmpty ? "—" : row.email, font: fontBody, color: colorDark, x: col4.x, y: y - 11, width: col4.w - 4)
             y -= 14
+        }
+        return y
+    }
+
+    /// Same row drawing as drawPeopleTable, but with a small department sub-header before
+    /// each non-empty group — used for the crew table, which is grouped rather than one flat
+    /// alphabetical list (see CALLSHEET_SPEC.md §2.8's department order).
+    private static func drawGroupedPeopleTable(
+        y: CGFloat, groups: [(department: DepartmentKind, rows: [ContactRow])], emptyMessage: String
+    ) -> CGFloat {
+        var y = y
+        if groups.allSatisfy({ $0.rows.isEmpty }) {
+            return drawText(emptyMessage, font: fontBody, color: colorMid,
+                            x: margin + 6, y: y, width: colWidth - 12)
+        }
+        let (col1, col2, col3, col4) = columnPositions()
+        let subheadAttr: [NSAttributedString.Key: Any] = [.font: fontSubhead, .foregroundColor: colorMid]
+        for group in groups where !group.rows.isEmpty {
+            NSAttributedString(string: group.department.displayName.uppercased(), attributes: subheadAttr)
+                .draw(in: CGRect(x: col1.x, y: y - 11, width: colWidth - 12, height: 11))
+            y -= 15
+            for (i, row) in group.rows.enumerated() {
+                if i % 2 == 0 {
+                    NSColor(white: 0.97, alpha: 1).setFill()
+                    NSBezierPath(rect: CGRect(x: margin, y: y - 12, width: colWidth, height: 13)).fill()
+                }
+                drawTextInline(row.name,                          font: fontBody, color: colorDark, x: col1.x, y: y - 11, width: col1.w - 4)
+                drawTextInline(row.roleOrCharacter,                font: fontBody, color: colorMid,  x: col2.x, y: y - 11, width: col2.w - 4)
+                drawTextInline(row.phone.isEmpty ? "—" : row.phone, font: fontBody, color: colorDark, x: col3.x, y: y - 11, width: col3.w - 4)
+                drawTextInline(row.email.isEmpty ? "—" : row.email, font: fontBody, color: colorDark, x: col4.x, y: y - 11, width: col4.w - 4)
+                y -= 14
+            }
+            y -= 4   // small gap between department groups
         }
         return y
     }

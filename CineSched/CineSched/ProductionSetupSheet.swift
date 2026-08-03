@@ -29,6 +29,8 @@ struct ProductionSetupSheet: View {
     @State private var newCrewName:           String = ""
     @State private var newCrewRole:           String = ""
     @State private var newCrewIsDailyDefault: Bool   = false
+    @State private var newCrewDepartment:     DepartmentKind = .none
+    @State private var newCrewOtherDepartment: String = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -202,98 +204,68 @@ struct ProductionSetupSheet: View {
                     if crew.isEmpty {
                         Text("No crew added yet.").font(.caption).foregroundColor(.secondary)
                     } else {
-                        ForEach(Array(crew.enumerated()), id: \.element.id) { index, member in
-                            VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                TextField("Name", text: Binding(
-                                    get: { crew[index].name },
-                                    set: { crew[index].name = $0 }
-                                ))
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
-
-                                TextField("Role", text: Binding(
-                                    get: { crew[index].role },
-                                    set: { crew[index].role = $0 }
-                                ))
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
-                                .frame(maxWidth: 120)
-
-                                Toggle("", isOn: Binding(
-                                    get: { crew[index].isDailyDefault },
-                                    set: { crew[index].isDailyDefault = $0 }
-                                ))
-                                .toggleStyle(.checkbox)
-                                .frame(width: 44, alignment: .center)
-
-                                Button {
-                                    crewContactsEditorIndex = index
-                                } label: {
-                                    let count = crew[index].contacts.count
-                                    HStack(spacing: 3) {
-                                        Image(systemName: count > 0 ? "phone.badge.checkmark" : "phone")
-                                        if count > 0 { Text("\(count)").font(.caption2) }
-                                    }
-                                    .foregroundColor(count > 0 ? .blue : .secondary)
-                                }
-                                .buttonStyle(.plain)
-                                .help("Manage contact info")
-                                .popover(isPresented: Binding(
-                                    get: { crewContactsEditorIndex == index },
-                                    set: { if !$0 { crewContactsEditorIndex = nil } }
-                                )) {
-                                    ContactsEditor(contacts: Binding(
-                                        get: { crew[index].contacts },
-                                        set: { crew[index].contacts = $0 }
-                                    ), personLabel: crew[index].displayString)
-                                }
-
-                                Button { crew.remove(at: index) } label: {
-                                    Image(systemName: "minus.circle").foregroundColor(.red)
-                                }
-                                .buttonStyle(.plain)
-                                .frame(width: 28)
+                        // Grouped by department (traditional call-sheet order — see
+                        // DepartmentKind.sortOrder), not the flat add-order list this used to
+                        // be. Each entry keeps its real index into `crew` so the row's
+                        // bindings still edit the right person regardless of display order.
+                        ForEach(groupedCrew, id: \.department) { group in
+                            Text(group.department.displayName.uppercased())
+                                .font(.caption2).fontWeight(.semibold).foregroundColor(.secondary)
+                                .padding(.top, 4)
+                            ForEach(group.entries, id: \.index) { entry in
+                                crewRow(index: entry.index)
                             }
-                            // Same at-a-glance contact preview as the cast rows above —
-                            // display only, editing stays in the Contacts popover.
-                            ContactPreviewLine(
-                                phone: crew[index].primaryPhone,
-                                email: crew[index].primaryEmail
-                            )
-                            }
-                            .padding(8)
-                            .background(member.isDailyDefault
-                                ? Color.blue.opacity(0.07)
-                                : Color.gray.opacity(0.08))
-                            .cornerRadius(6)
                         }
                     }
 
                     // Add crew member
-                    HStack(spacing: 8) {
-                        TextField("Name", text: $newCrewName)
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                        TextField("Role (e.g. DP)", text: $newCrewRole)
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                            .frame(maxWidth: 140)
-                        Toggle("Daily", isOn: $newCrewIsDailyDefault)
-                            .toggleStyle(.checkbox)
-                            .help("Pre-populate on every call sheet")
-                        Button {
-                            let name = newCrewName.trimmingCharacters(in: .whitespaces)
-                            guard !name.isEmpty else { return }
-                            crew.append(CrewMember(
-                                name:           name,
-                                role:           newCrewRole.trimmingCharacters(in: .whitespaces),
-                                isDailyDefault: newCrewIsDailyDefault
-                            ))
-                            newCrewName           = ""
-                            newCrewRole           = ""
-                            newCrewIsDailyDefault = false
-                        } label: {
-                            Image(systemName: "plus.circle.fill").foregroundColor(.blue).font(.title3)
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            TextField("Name", text: $newCrewName)
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                            TextField("Role (e.g. DP)", text: $newCrewRole)
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                                .frame(maxWidth: 140)
+                            Toggle("Daily", isOn: $newCrewIsDailyDefault)
+                                .toggleStyle(.checkbox)
+                                .help("Pre-populate on every call sheet")
+                            Button {
+                                let name = newCrewName.trimmingCharacters(in: .whitespaces)
+                                guard !name.isEmpty else { return }
+                                crew.append(CrewMember(
+                                    name:           name,
+                                    role:           newCrewRole.trimmingCharacters(in: .whitespaces),
+                                    isDailyDefault: newCrewIsDailyDefault,
+                                    department:     Department(kind: newCrewDepartment, otherText: newCrewOtherDepartment)
+                                ))
+                                newCrewName            = ""
+                                newCrewRole            = ""
+                                newCrewIsDailyDefault  = false
+                                newCrewDepartment      = .none
+                                newCrewOtherDepartment = ""
+                            } label: {
+                                Image(systemName: "plus.circle.fill").foregroundColor(.blue).font(.title3)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(newCrewName.trimmingCharacters(in: .whitespaces).isEmpty)
                         }
-                        .buttonStyle(.plain)
-                        .disabled(newCrewName.trimmingCharacters(in: .whitespaces).isEmpty)
+
+                        HStack(spacing: 8) {
+                            Text("Department:").font(.caption).foregroundColor(.secondary)
+                            Picker("", selection: $newCrewDepartment) {
+                                ForEach(DepartmentKind.pickerOrder, id: \.self) { kind in
+                                    Text(kind.displayName).tag(kind)
+                                }
+                            }
+                            .labelsHidden()
+                            .frame(width: 170)
+
+                            if newCrewDepartment == .other {
+                                TextField("Department name", text: $newCrewOtherDepartment)
+                                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                                    .frame(width: 140)
+                            }
+                        }
                     }
                 }
                 .padding(24)
@@ -340,6 +312,118 @@ struct ProductionSetupSheet: View {
             castList      = productionInfo.castList
             crew          = productionInfo.crew
         }
+    }
+
+    // MARK: - Crew grouping
+
+    /// Crew grouped by department in traditional call-sheet order (DepartmentKind.sortOrder
+    /// — None sorts last, separately from the named departments), alphabetical by name
+    /// within each group. Each entry keeps its real index into the flat `crew` array, since
+    /// that's what every row's bindings and the Contacts/remove buttons key off of.
+    private var groupedCrew: [(department: DepartmentKind, entries: [(index: Int, member: CrewMember)])] {
+        let indexed = Array(crew.enumerated())
+        let buckets = Dictionary(grouping: indexed) { $0.element.department.kind }
+        return buckets
+            .map { kind, items in
+                (
+                    department: kind,
+                    entries: items
+                        .map { (index: $0.offset, member: $0.element) }
+                        .sorted { $0.member.name.localizedCaseInsensitiveCompare($1.member.name) == .orderedAscending }
+                )
+            }
+            .sorted { $0.department.sortIndex < $1.department.sortIndex }
+    }
+
+    /// One crew row: name/role/daily/contacts/remove on the first line, department picker
+    /// (with a free-text field when "Other" is selected) and the contact preview beneath.
+    @ViewBuilder
+    private func crewRow(index: Int) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                TextField("Name", text: Binding(
+                    get: { crew[index].name },
+                    set: { crew[index].name = $0 }
+                ))
+                .textFieldStyle(RoundedBorderTextFieldStyle())
+
+                TextField("Role", text: Binding(
+                    get: { crew[index].role },
+                    set: { crew[index].role = $0 }
+                ))
+                .textFieldStyle(RoundedBorderTextFieldStyle())
+                .frame(maxWidth: 120)
+
+                Toggle("", isOn: Binding(
+                    get: { crew[index].isDailyDefault },
+                    set: { crew[index].isDailyDefault = $0 }
+                ))
+                .toggleStyle(.checkbox)
+                .frame(width: 44, alignment: .center)
+
+                Button {
+                    crewContactsEditorIndex = index
+                } label: {
+                    let count = crew[index].contacts.count
+                    HStack(spacing: 3) {
+                        Image(systemName: count > 0 ? "phone.badge.checkmark" : "phone")
+                        if count > 0 { Text("\(count)").font(.caption2) }
+                    }
+                    .foregroundColor(count > 0 ? .blue : .secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Manage contact info")
+                .popover(isPresented: Binding(
+                    get: { crewContactsEditorIndex == index },
+                    set: { if !$0 { crewContactsEditorIndex = nil } }
+                )) {
+                    ContactsEditor(contacts: Binding(
+                        get: { crew[index].contacts },
+                        set: { crew[index].contacts = $0 }
+                    ), personLabel: crew[index].displayString)
+                }
+
+                Button { crew.remove(at: index) } label: {
+                    Image(systemName: "minus.circle").foregroundColor(.red)
+                }
+                .buttonStyle(.plain)
+                .frame(width: 28)
+            }
+
+            HStack(spacing: 8) {
+                Picker("", selection: Binding(
+                    get: { crew[index].department.kind },
+                    set: { crew[index].department.kind = $0 }
+                )) {
+                    ForEach(DepartmentKind.pickerOrder, id: \.self) { kind in
+                        Text(kind.displayName).tag(kind)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 170)
+
+                if crew[index].department.kind == .other {
+                    TextField("Department name", text: Binding(
+                        get: { crew[index].department.otherText },
+                        set: { crew[index].department.otherText = $0 }
+                    ))
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .frame(width: 140)
+                }
+            }
+
+            // Same at-a-glance contact preview as the cast rows above — display only,
+            // editing stays in the Contacts popover.
+            ContactPreviewLine(
+                phone: crew[index].primaryPhone,
+                email: crew[index].primaryEmail
+            )
+        }
+        .padding(8)
+        .background(crew[index].isDailyDefault
+            ? Color.blue.opacity(0.07)
+            : Color.gray.opacity(0.08))
+        .cornerRadius(6)
     }
 }
 
