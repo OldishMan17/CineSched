@@ -79,7 +79,7 @@ class CallSheetExporter {
         drawTextRight(dateStr, font: fontBody, color: colorMid, x: margin, y: y + 16, width: colWidth)
         y -= 6
         var infoLine = ""
-        if !productionInfo.directorName.isEmpty  { infoLine += "Director: \(productionInfo.directorName)     " }
+        if !productionInfo.director.name.isEmpty { infoLine += "Director: \(productionInfo.director.name)     " }
         if !productionInfo.contactNumber.isEmpty { infoLine += "Contact: \(productionInfo.contactNumber)" }
         if !infoLine.isEmpty {
             y = drawText(infoLine.trimmingCharacters(in: .whitespaces),

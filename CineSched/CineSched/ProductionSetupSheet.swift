@@ -13,13 +13,18 @@ struct ProductionSetupSheet: View {
     var onCharacterRenamed: (String, String) -> Void = { _, _ in }
 
     @State private var companyName:   String = ""
-    @State private var directorName:  String = ""
+    @State private var director:      KeyContact = KeyContact()
+    @State private var producer:      KeyContact = KeyContact()
     @State private var contactNumber: String = ""
     @State private var castList:      [CastMember] = []
     @State private var crew:          [CrewMember] = []
 
     @State private var newActorName:          String = ""
     @State private var availabilityEditorIndex: Int? = nil
+    @State private var castContactsEditorIndex: Int? = nil
+    @State private var crewContactsEditorIndex: Int? = nil
+    @State private var showingDirectorContacts: Bool = false
+    @State private var showingProducerContacts: Bool = false
     @State private var newCharacterName:      String = ""
     @State private var newCrewName:           String = ""
     @State private var newCrewRole:           String = ""
@@ -55,7 +60,10 @@ struct ProductionSetupSheet: View {
                     Group {
                         Label("Production Details", systemImage: "building.2").font(.headline)
                         LabeledField("Production Company", placeholder: "e.g. Tempel Films", text: $companyName)
-                        LabeledField("Director",           placeholder: "e.g. Chris Tempel",  text: $directorName)
+                        LabeledKeyContactField("Director", placeholder: "e.g. Chris Tempel",
+                                                contact: $director, showingContacts: $showingDirectorContacts)
+                        LabeledKeyContactField("Producer", placeholder: "e.g. Jamie Rivera",
+                                                contact: $producer, showingContacts: $showingProducerContacts)
                         LabeledField("Contact Number",     placeholder: "e.g. 555-867-5309",  text: $contactNumber)
                     }
 
@@ -70,6 +78,7 @@ struct ProductionSetupSheet: View {
                         Text("No cast added yet.").font(.caption).foregroundColor(.secondary)
                     } else {
                         ForEach(Array(castList.enumerated()), id: \.element.id) { index, member in
+                            VStack(alignment: .leading, spacing: 4) {
                             HStack(spacing: 8) {
                                 TextField("Actor name", text: Binding(
                                     get: { castList[index].actorName },
@@ -105,10 +114,42 @@ struct ProductionSetupSheet: View {
                                     ), personLabel: castList[index].displayString)
                                 }
 
+                                Button {
+                                    castContactsEditorIndex = index
+                                } label: {
+                                    let count = castList[index].contacts.count
+                                    HStack(spacing: 3) {
+                                        Image(systemName: count > 0 ? "phone.badge.checkmark" : "phone")
+                                        if count > 0 { Text("\(count)").font(.caption2) }
+                                    }
+                                    .foregroundColor(count > 0 ? .blue : .secondary)
+                                }
+                                .buttonStyle(.plain)
+                                .help("Manage contact info")
+                                .popover(isPresented: Binding(
+                                    get: { castContactsEditorIndex == index },
+                                    set: { if !$0 { castContactsEditorIndex = nil } }
+                                )) {
+                                    ContactsEditor(contacts: Binding(
+                                        get: { castList[index].contacts },
+                                        set: { castList[index].contacts = $0 }
+                                    ), personLabel: castList[index].displayString)
+                                }
+
                                 Button { castList.remove(at: index) } label: {
                                     Image(systemName: "minus.circle").foregroundColor(.red)
                                 }
                                 .buttonStyle(.plain)
+                            }
+                            // At-a-glance preview of this person's primary contacts — only
+                            // takes up room once there's something to show, so rows for
+                            // people with no contacts yet stay exactly as compact as before.
+                            // Purely a display convenience: editing still only happens in
+                            // the Contacts popover above, never here.
+                            ContactPreviewLine(
+                                phone: castList[index].primaryPhone,
+                                email: castList[index].primaryEmail
+                            )
                             }
                             .padding(8)
                             .background(Color.gray.opacity(0.08))
@@ -154,6 +195,7 @@ struct ProductionSetupSheet: View {
                             .font(.caption).foregroundColor(.secondary)
                             .frame(width: 44, alignment: .center)
                         Spacer().frame(width: 28)
+                        Spacer().frame(width: 28)
                     }
                     .padding(.horizontal, 8)
 
@@ -161,6 +203,7 @@ struct ProductionSetupSheet: View {
                         Text("No crew added yet.").font(.caption).foregroundColor(.secondary)
                     } else {
                         ForEach(Array(crew.enumerated()), id: \.element.id) { index, member in
+                            VStack(alignment: .leading, spacing: 4) {
                             HStack {
                                 TextField("Name", text: Binding(
                                     get: { crew[index].name },
@@ -182,11 +225,40 @@ struct ProductionSetupSheet: View {
                                 .toggleStyle(.checkbox)
                                 .frame(width: 44, alignment: .center)
 
+                                Button {
+                                    crewContactsEditorIndex = index
+                                } label: {
+                                    let count = crew[index].contacts.count
+                                    HStack(spacing: 3) {
+                                        Image(systemName: count > 0 ? "phone.badge.checkmark" : "phone")
+                                        if count > 0 { Text("\(count)").font(.caption2) }
+                                    }
+                                    .foregroundColor(count > 0 ? .blue : .secondary)
+                                }
+                                .buttonStyle(.plain)
+                                .help("Manage contact info")
+                                .popover(isPresented: Binding(
+                                    get: { crewContactsEditorIndex == index },
+                                    set: { if !$0 { crewContactsEditorIndex = nil } }
+                                )) {
+                                    ContactsEditor(contacts: Binding(
+                                        get: { crew[index].contacts },
+                                        set: { crew[index].contacts = $0 }
+                                    ), personLabel: crew[index].displayString)
+                                }
+
                                 Button { crew.remove(at: index) } label: {
                                     Image(systemName: "minus.circle").foregroundColor(.red)
                                 }
                                 .buttonStyle(.plain)
                                 .frame(width: 28)
+                            }
+                            // Same at-a-glance contact preview as the cast rows above —
+                            // display only, editing stays in the Contacts popover.
+                            ContactPreviewLine(
+                                phone: crew[index].primaryPhone,
+                                email: crew[index].primaryEmail
+                            )
                             }
                             .padding(8)
                             .background(member.isDailyDefault
@@ -247,7 +319,8 @@ struct ProductionSetupSheet: View {
                     }
 
                     productionInfo.companyName   = companyName
-                    productionInfo.directorName  = directorName
+                    productionInfo.director      = director
+                    productionInfo.producer      = producer
                     productionInfo.contactNumber = contactNumber
                     productionInfo.castList      = castList
                     productionInfo.crew          = crew
@@ -261,7 +334,8 @@ struct ProductionSetupSheet: View {
         .frame(width: 580, height: 700)
         .onAppear {
             companyName   = productionInfo.companyName
-            directorName  = productionInfo.directorName
+            director      = productionInfo.director
+            producer      = productionInfo.producer
             contactNumber = productionInfo.contactNumber
             castList      = productionInfo.castList
             crew          = productionInfo.crew
@@ -284,6 +358,80 @@ private struct LabeledField: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label).font(.subheadline).foregroundColor(.secondary)
             TextField(placeholder, text: $text).textFieldStyle(RoundedBorderTextFieldStyle())
+        }
+    }
+}
+
+/// Same idea as LabeledField, but for a single named production contact (Director,
+/// Producer) that — like crew and cast — can have its own list of contact methods. Reuses
+/// the exact same ContactsEditor popover the Cast/Crew rows use below.
+private struct LabeledKeyContactField: View {
+    let label: String
+    let placeholder: String
+    @Binding var contact: KeyContact
+    @Binding var showingContacts: Bool
+
+    init(_ label: String, placeholder: String, contact: Binding<KeyContact>, showingContacts: Binding<Bool>) {
+        self.label           = label
+        self.placeholder     = placeholder
+        self._contact        = contact
+        self._showingContacts = showingContacts
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label).font(.subheadline).foregroundColor(.secondary)
+            HStack(spacing: 8) {
+                TextField(placeholder, text: $contact.name)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+
+                Button {
+                    showingContacts = true
+                } label: {
+                    let count = contact.contacts.count
+                    HStack(spacing: 3) {
+                        Image(systemName: count > 0 ? "phone.badge.checkmark" : "phone")
+                        if count > 0 { Text("\(count)").font(.caption2) }
+                    }
+                    .foregroundColor(count > 0 ? .blue : .secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Manage \(label)'s contact info")
+                .popover(isPresented: $showingContacts) {
+                    ContactsEditor(
+                        contacts: $contact.contacts,
+                        personLabel: contact.name.isEmpty ? label : contact.name
+                    )
+                }
+            }
+        }
+    }
+}
+
+/// A small "at a glance" preview of a person's primary phone/email beneath their row in the
+/// Cast or Crew list — renders nothing at all if neither is set, so a person with no
+/// contacts yet doesn't grow an empty line. Read-only: this is purely a display shortcut,
+/// not an editing surface — actually adding/changing/removing contacts always happens
+/// through that row's Contacts popover.
+private struct ContactPreviewLine: View {
+    let phone: String?
+    let email: String?
+
+    var body: some View {
+        if phone != nil || email != nil {
+            HStack(spacing: 14) {
+                if let phone {
+                    Label(phone, systemImage: "phone.fill")
+                }
+                if let email {
+                    Label(email, systemImage: "envelope.fill")
+                }
+                Spacer()
+            }
+            .font(.caption2)
+            .foregroundColor(.secondary)
+            .lineLimit(1)
+            .padding(.leading, 2)
         }
     }
 }
@@ -348,5 +496,89 @@ private struct AvailabilityEditor: View {
             return formattedDate(range.start)
         }
         return "\(formattedDate(range.start)) – \(formattedDate(range.end))"
+    }
+}
+
+/// Popover content for managing one person's contact list — same pattern as
+/// AvailabilityEditor above, just editing ContactMethod entries (type + value) instead of
+/// date ranges. No limit on how many entries of the same type someone can have — e.g. two
+/// cell numbers are both just separate rows.
+private struct ContactsEditor: View {
+    @Binding var contacts: [ContactMethod]
+    let personLabel: String
+
+    @State private var newType:  ContactType = .cell
+    @State private var newValue: String = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Contacts").font(.headline)
+            Text(personLabel.isEmpty ? "Unnamed" : personLabel)
+                .font(.caption).foregroundColor(.secondary)
+
+            if contacts.isEmpty {
+                Text("No contacts added yet.").font(.caption).foregroundColor(.secondary)
+            } else {
+                ForEach(Array(contacts.enumerated()), id: \.element.id) { index, _ in
+                    HStack(spacing: 6) {
+                        Picker("", selection: Binding(
+                            get: { contacts[index].type },
+                            set: { contacts[index].type = $0 }
+                        )) {
+                            ForEach(ContactType.allCases, id: \.self) { type in
+                                Text(type.displayName).tag(type)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 110)
+
+                        TextField("Value", text: Binding(
+                            get: { contacts[index].value },
+                            set: { contacts[index].value = $0 }
+                        ))
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+
+                        Button {
+                            contacts.remove(at: index)
+                        } label: {
+                            Image(systemName: "minus.circle").foregroundColor(.red)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            Divider()
+
+            Text("Add a contact").font(.caption).foregroundColor(.secondary)
+            HStack(spacing: 6) {
+                Picker("", selection: $newType) {
+                    ForEach(ContactType.allCases, id: \.self) { type in
+                        Text(type.displayName).tag(type)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 110)
+
+                TextField("e.g. 555.555.0182", text: $newValue)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .onSubmit(addContact)
+
+                Button(action: addContact) {
+                    Image(systemName: "plus.circle.fill").foregroundColor(.blue)
+                }
+                .buttonStyle(.plain)
+                .disabled(newValue.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(16)
+        .frame(width: 340)
+    }
+
+    private func addContact() {
+        let trimmed = newValue.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        contacts.append(ContactMethod(type: newType, value: trimmed))
+        newValue = ""
     }
 }

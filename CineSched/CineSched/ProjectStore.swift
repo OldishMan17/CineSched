@@ -422,6 +422,23 @@ extension ContentView {
         )
     }
 
+    /// Standalone cast/crew phone list — separate from the calendar schedule and the
+    /// per-day call sheet, for when someone just needs contact info, not the full schedule.
+    func showContactSheetPDFSavePanel() {
+        guard let pdfData = ContactSheetExporter.generatePDF(
+            productionInfo: productionInfo,
+            projectTitle: projectTitle
+        ) else {
+            alertMessage = "Failed to generate contact sheet PDF."
+            showingAlert = true
+            return
+        }
+        showPDFSavePanel(
+            data: pdfData,
+            defaultName: sanitizeFilename("\(projectTitle.isEmpty ? "MovieSchedule" : projectTitle)_ContactSheet")
+        )
+    }
+
     func showCallSheetPDFSavePanel(for day: ShootDay) {
         guard let pdfData = CallSheetExporter.generatePDF(
             shootDay: day,

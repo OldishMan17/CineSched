@@ -208,6 +208,9 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .csExportDaysOutOfDays)) { _ in
             showDaysOutOfDaysPDFSavePanel()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .csExportContactSheet)) { _ in
+            showContactSheetPDFSavePanel()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .csOpenProductionSetup)) { _ in
             showingProductionSetup = true
         }

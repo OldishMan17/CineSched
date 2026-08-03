@@ -300,6 +300,19 @@ struct CrewMember: Identifiable, Codable, Hashable {
     var displayString: String {
         role.isEmpty ? name : "\(name) — \(role)"
     }
+
+    /// The first Cell-type entry, if any — shown as a quick-glance "primary phone" wherever
+    /// opening the full Contacts popover would be overkill (a sidebar row, a printed
+    /// contact sheet). The full list, and the ability to have several numbers, is unchanged
+    /// — this is just which one gets a shortcut.
+    var primaryPhone: String? {
+        contacts.first(where: { $0.type == .cell })?.value
+    }
+
+    /// The first Email-type entry, if any — same idea as primaryPhone.
+    var primaryEmail: String? {
+        contacts.first(where: { $0.type == .email })?.value
+    }
 }
 
 // MARK: - CastMember
@@ -366,6 +379,16 @@ struct CastMember: Identifiable, Codable, Hashable {
     var displayString: String {
         actorName.isEmpty ? characterName : "\(actorName) — \(characterName)"
     }
+
+    /// The first Cell-type entry, if any — see CrewMember.primaryPhone for why.
+    var primaryPhone: String? {
+        contacts.first(where: { $0.type == .cell })?.value
+    }
+
+    /// The first Email-type entry, if any — see CrewMember.primaryEmail for why.
+    var primaryEmail: String? {
+        contacts.first(where: { $0.type == .email })?.value
+    }
 }
 
 // MARK: - Scene tooltip
@@ -390,27 +413,95 @@ extension Scene {
     }
 }
 
+// MARK: - KeyContact
+
+/// A single named production contact who isn't part of a roster — the Director, the
+/// Producer. Same idea as CrewMember/CastMember's contact handling (a name plus a list of
+/// typed ContactMethod entries), just for a role where there's exactly one person rather
+/// than a list of them.
+struct KeyContact: Codable, Equatable {
+    var name: String
+    var contacts: [ContactMethod]
+
+    init(name: String = "", contacts: [ContactMethod] = []) {
+        self.name     = name
+        self.contacts = contacts
+    }
+
+    var primaryPhone: String? { contacts.first(where: { $0.type == .cell })?.value }
+    var primaryEmail: String? { contacts.first(where: { $0.type == .email })?.value }
+}
+
 // MARK: - ProductionInfo
 
 struct ProductionInfo: Codable, Equatable {
     var companyName:   String
-    var directorName:  String
+    var director:      KeyContact
+    var producer:      KeyContact
     var contactNumber: String
     var crew:          [CrewMember]
     var castList:      [CastMember]
 
     init(
         companyName:   String = "",
-        directorName:  String = "",
+        director:      KeyContact = KeyContact(),
+        producer:      KeyContact = KeyContact(),
         contactNumber: String = "",
         crew:          [CrewMember] = [],
         castList:      [CastMember] = []
     ) {
         self.companyName   = companyName
-        self.directorName  = directorName
+        self.director      = director
+        self.producer      = producer
         self.contactNumber = contactNumber
         self.crew          = crew
         self.castList      = castList
+    }
+
+    // Raw string values are unchanged from before ("directorName", "producerName") even
+    // though the Swift property names are now `director`/`producer` — keeps the on-disk
+    // JSON key stable while the value shape underneath changes from a plain string to a
+    // structured {name, contacts} object.
+    enum CodingKeys: String, CodingKey {
+        case companyName
+        case directorName
+        case producerName
+        case contactNumber, crew, castList
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        companyName   = try c.decode(String.self, forKey: .companyName)
+        director      = Self.decodeKeyContact(c, key: .directorName)
+        producer      = Self.decodeKeyContact(c, key: .producerName)
+        contactNumber = try c.decode(String.self, forKey: .contactNumber)
+        crew          = try c.decode([CrewMember].self, forKey: .crew)
+        castList      = try c.decode([CastMember].self, forKey: .castList)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(companyName,   forKey: .companyName)
+        try c.encode(director,      forKey: .directorName)
+        try c.encode(producer,      forKey: .producerName)
+        try c.encode(contactNumber, forKey: .contactNumber)
+        try c.encode(crew,          forKey: .crew)
+        try c.encode(castList,      forKey: .castList)
+    }
+
+    /// A key contact might be in any of three states depending on when the file was saved:
+    /// a structured {name, contacts} object (current format), a plain string (Director
+    /// existed before Producer or contacts did — just a name, no contacts), or absent
+    /// entirely (Producer didn't exist at all before a few steps ago). Tries each in turn
+    /// rather than assuming the newest format.
+    private static func decodeKeyContact(_ c: KeyedDecodingContainer<CodingKeys>, key: CodingKeys) -> KeyContact {
+        if let structured = try? c.decode(KeyContact.self, forKey: key) {
+            return structured
+        }
+        if let legacyName = try? c.decode(String.self, forKey: key) {
+            return KeyContact(name: legacyName)
+        }
+        return KeyContact()
     }
 }
 

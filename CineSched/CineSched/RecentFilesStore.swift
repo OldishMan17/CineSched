@@ -20,6 +20,7 @@ extension Notification.Name {
     static let csSaveProjectAs       = Notification.Name("CineSched.saveProjectAs")
     static let csExportSchedulePDF   = Notification.Name("CineSched.exportSchedulePDF")
     static let csExportDaysOutOfDays = Notification.Name("CineSched.exportDaysOutOfDays")
+    static let csExportContactSheet  = Notification.Name("CineSched.exportContactSheet")
     static let csOpenProductionSetup = Notification.Name("CineSched.openProductionSetup")
     static let csScanForConflicts    = Notification.Name("CineSched.scanForConflicts")
 }

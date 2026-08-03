@@ -76,6 +76,10 @@ struct CineSchedApp: App {
                     NotificationCenter.default.post(name: .csExportDaysOutOfDays, object: nil)
                 }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
+
+                Button("Export Contact Sheet…") {
+                    NotificationCenter.default.post(name: .csExportContactSheet, object: nil)
+                }
             }
 
             // A home for the one action that doesn't fit File/Edit/View

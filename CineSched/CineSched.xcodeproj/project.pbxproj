@@ -30,10 +30,9 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		2C2B3200CC4450508C0C164E /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+		2C2B3200CC4450508C0C164E /* Exceptions for "CineSched" folder in "CineSched" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
-				CineSched.entitlements,
 				Info.plist,
 			);
 			target = 5DBC1C3C301D2EE6003C4C58 /* CineSched */;
@@ -44,7 +43,7 @@
 		5DBC1C3F301D2EE6003C4C58 /* CineSched */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
-				2C2B3200CC4450508C0C164E /* PBXFileSystemSynchronizedBuildFileExceptionSet */,
+				2C2B3200CC4450508C0C164E /* Exceptions for "CineSched" folder in "CineSched" target */,
 			);
 			path = CineSched;
 			sourceTree = "<group>";
