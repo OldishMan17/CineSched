@@ -224,6 +224,47 @@ struct CallSheetData: Codable {
     }
 }
 
+// MARK: - ContactMethod
+
+/// One typed contact method — a person can have several (a cell, a separate home or office
+/// number, an email, an emergency contact), not just one or two plain text fields. See
+/// CALLSHEET_SPEC.md §3.6: real phone numbers carry their type in how they're written
+/// (a trailing "555.555.0182c" for cell, "h" for home, etc.) — this structured `type` field
+/// replaces the need for that notation going forward, so `value` is always just the plain
+/// number or address, never a suffix to parse.
+///
+/// Storing this is a separate concern from ever *printing* it — CALLSHEET_SPEC.md §2.8:
+/// union call sheets omit crew phone/email entirely while indie/student sheets print them
+/// inline. That's a future per-production display toggle; nothing here assumes contacts
+/// will always be shown.
+enum ContactType: String, Codable, CaseIterable {
+    case cell, home, office, email, emergency, fax, other
+
+    var displayName: String {
+        switch self {
+        case .cell:      return "Cell"
+        case .home:      return "Home"
+        case .office:    return "Office"
+        case .email:     return "Email"
+        case .emergency: return "Emergency"
+        case .fax:       return "Fax"
+        case .other:     return "Other"
+        }
+    }
+}
+
+struct ContactMethod: Identifiable, Codable, Hashable {
+    let id: UUID
+    var type:  ContactType
+    var value: String
+
+    init(type: ContactType = .cell, value: String = "") {
+        self.id    = UUID()
+        self.type  = type
+        self.value = value
+    }
+}
+
 // MARK: - CrewMember
 
 struct CrewMember: Identifiable, Codable, Hashable {
@@ -231,16 +272,18 @@ struct CrewMember: Identifiable, Codable, Hashable {
     var name:           String
     var role:           String
     var isDailyDefault: Bool
+    var contacts:       [ContactMethod]
 
-    init(name: String = "", role: String = "", isDailyDefault: Bool = false) {
+    init(name: String = "", role: String = "", isDailyDefault: Bool = false, contacts: [ContactMethod] = []) {
         self.id             = UUID()
         self.name           = name
         self.role           = role
         self.isDailyDefault = isDailyDefault
+        self.contacts       = contacts
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, role, isDailyDefault
+        case id, name, role, isDailyDefault, contacts
     }
 
     init(from decoder: Decoder) throws {
@@ -249,6 +292,9 @@ struct CrewMember: Identifiable, Codable, Hashable {
         name           = try c.decode(String.self, forKey: .name)
         role           = try c.decode(String.self, forKey: .role)
         isDailyDefault = try c.decodeIfPresent(Bool.self, forKey: .isDailyDefault) ?? false
+        // Absent on any crew member saved before contacts existed — no prior field held
+        // phone/email at all, so there's nothing to migrate from, just an empty list.
+        contacts       = try c.decodeIfPresent([ContactMethod].self, forKey: .contacts) ?? []
     }
 
     var displayString: String {
@@ -287,16 +333,23 @@ struct CastMember: Identifiable, Codable, Hashable {
     var actorName:     String
     var characterName: String
     var unavailableRanges: [DateRange]
+    var contacts:      [ContactMethod]
 
-    init(actorName: String = "", characterName: String = "", unavailableRanges: [DateRange] = []) {
+    init(
+        actorName: String = "",
+        characterName: String = "",
+        unavailableRanges: [DateRange] = [],
+        contacts: [ContactMethod] = []
+    ) {
         self.id                = UUID()
         self.actorName         = actorName
         self.characterName     = characterName
         self.unavailableRanges = unavailableRanges
+        self.contacts          = contacts
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, actorName, characterName, unavailableRanges
+        case id, actorName, characterName, unavailableRanges, contacts
     }
 
     init(from decoder: Decoder) throws {
@@ -305,6 +358,9 @@ struct CastMember: Identifiable, Codable, Hashable {
         actorName         = try c.decode(String.self, forKey: .actorName)
         characterName     = try c.decode(String.self, forKey: .characterName)
         unavailableRanges = try c.decodeIfPresent([DateRange].self, forKey: .unavailableRanges) ?? []
+        // Absent on any cast member saved before contacts existed — no prior field held
+        // phone/email at all, so there's nothing to migrate from, just an empty list.
+        contacts          = try c.decodeIfPresent([ContactMethod].self, forKey: .contacts) ?? []
     }
 
     var displayString: String {
