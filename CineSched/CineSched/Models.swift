@@ -149,6 +149,25 @@ struct Location: Identifiable, Codable, Hashable {
     }
 }
 
+// MARK: - Hospital
+
+/// Nearest-hospital entry for a shoot day — name, address, phone, same repeatable-list shape
+/// as ContactMethod. Support for more than one matters: CALLSHEET_SPEC.md §2.2 notes some
+/// productions carry two (e.g. a shoot spanning two locations, or a backup facility).
+struct Hospital: Identifiable, Codable, Hashable {
+    let id: UUID
+    var name:    String
+    var address: String
+    var phone:   String
+
+    init(name: String = "", address: String = "", phone: String = "") {
+        self.id      = UUID()
+        self.name    = name
+        self.address = address
+        self.phone   = phone
+    }
+}
+
 // MARK: - CallSheetData
 
 struct CallSheetData: Codable {
@@ -166,6 +185,22 @@ struct CallSheetData: Codable {
                                           // to rename, so they're just kept as plain text
     var notes:           String
 
+    // Added later — see CALLSHEET_SPEC.md §2.1/§2.2. All text fields rather than strict time
+    // pickers: real call sheets carry ranges ("0600–0700") and free text ("COME HAVING HAD")
+    // in exactly these fields, not just clock times. Shooting call and meal times genuinely
+    // change day to day, so — unlike basecamp/crewPark/hospitals below — nothing carries
+    // these forward automatically.
+    var shootingCallTime: String
+    var breakfastTime:    String
+    var lunchTime:        String
+    var dinnerTime:       String
+    // Basecamp, crew park, and the hospital list are usually the same across consecutive
+    // days at one location — CallSheetEditor's "Copy from Previous Day" action carries just
+    // these three forward; it deliberately never touches shootingCallTime/meal times above.
+    var basecamp:         String
+    var crewPark:         String
+    var hospitals:        [Hospital]
+
     init(
         generalCallTime: String     = "",
         locations:       [Location] = [],
@@ -173,15 +208,53 @@ struct CallSheetData: Codable {
         crewOverride:    [String]?  = nil,
         crewIDOverride:  [UUID]?    = nil,
         crewOneOffs:     [String]?  = nil,
-        notes:           String    = ""
+        notes:           String    = "",
+        shootingCallTime: String   = "",
+        breakfastTime:    String   = "",
+        lunchTime:        String   = "",
+        dinnerTime:       String   = "",
+        basecamp:         String   = "",
+        crewPark:         String   = "",
+        hospitals:        [Hospital] = []
     ) {
-        self.generalCallTime = generalCallTime
-        self.locations       = locations
-        self.castOverride    = castOverride
-        self.crewOverride    = crewOverride
-        self.crewIDOverride  = crewIDOverride
-        self.crewOneOffs     = crewOneOffs
-        self.notes           = notes
+        self.generalCallTime  = generalCallTime
+        self.locations        = locations
+        self.castOverride     = castOverride
+        self.crewOverride     = crewOverride
+        self.crewIDOverride   = crewIDOverride
+        self.crewOneOffs      = crewOneOffs
+        self.notes            = notes
+        self.shootingCallTime = shootingCallTime
+        self.breakfastTime    = breakfastTime
+        self.lunchTime        = lunchTime
+        self.dinnerTime       = dinnerTime
+        self.basecamp         = basecamp
+        self.crewPark         = crewPark
+        self.hospitals        = hospitals
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case generalCallTime, locations, castOverride, crewOverride, crewIDOverride, crewOneOffs, notes
+        case shootingCallTime, breakfastTime, lunchTime, dinnerTime, basecamp, crewPark, hospitals
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        generalCallTime = try c.decode(String.self, forKey: .generalCallTime)
+        locations       = try c.decode([Location].self, forKey: .locations)
+        castOverride    = try c.decodeIfPresent([String].self, forKey: .castOverride)
+        crewOverride    = try c.decodeIfPresent([String].self, forKey: .crewOverride)
+        crewIDOverride  = try c.decodeIfPresent([UUID].self, forKey: .crewIDOverride)
+        crewOneOffs     = try c.decodeIfPresent([String].self, forKey: .crewOneOffs)
+        notes           = try c.decode(String.self, forKey: .notes)
+        // Absent on any day saved before these fields existed.
+        shootingCallTime = try c.decodeIfPresent(String.self, forKey: .shootingCallTime) ?? ""
+        breakfastTime    = try c.decodeIfPresent(String.self, forKey: .breakfastTime) ?? ""
+        lunchTime        = try c.decodeIfPresent(String.self, forKey: .lunchTime) ?? ""
+        dinnerTime       = try c.decodeIfPresent(String.self, forKey: .dinnerTime) ?? ""
+        basecamp         = try c.decodeIfPresent(String.self, forKey: .basecamp) ?? ""
+        crewPark         = try c.decodeIfPresent(String.self, forKey: .crewPark) ?? ""
+        hospitals        = try c.decodeIfPresent([Hospital].self, forKey: .hospitals) ?? []
     }
 
     /// Resolves the raw character names (auto-pulled from scenes, or the manually-edited
@@ -549,6 +622,9 @@ struct ProductionInfo: Codable, Equatable {
     var contactNumber: String
     var crew:          [CrewMember]
     var castList:      [CastMember]
+    // Set once per production — safety/conduct boilerplate printed on every call sheet's
+    // rules block, replacing the fixed placeholder text CallSheetExporter used to hardcode.
+    var boilerplateText: String
 
     init(
         companyName:   String = "",
@@ -556,14 +632,16 @@ struct ProductionInfo: Codable, Equatable {
         producer:      KeyContact = KeyContact(),
         contactNumber: String = "",
         crew:          [CrewMember] = [],
-        castList:      [CastMember] = []
+        castList:      [CastMember] = [],
+        boilerplateText: String = ""
     ) {
-        self.companyName   = companyName
-        self.director      = director
-        self.producer      = producer
-        self.contactNumber = contactNumber
-        self.crew          = crew
-        self.castList      = castList
+        self.companyName     = companyName
+        self.director        = director
+        self.producer        = producer
+        self.contactNumber   = contactNumber
+        self.crew            = crew
+        self.castList        = castList
+        self.boilerplateText = boilerplateText
     }
 
     // Raw string values are unchanged from before ("directorName", "producerName") even
@@ -574,7 +652,7 @@ struct ProductionInfo: Codable, Equatable {
         case companyName
         case directorName
         case producerName
-        case contactNumber, crew, castList
+        case contactNumber, crew, castList, boilerplateText
     }
 
     init(from decoder: Decoder) throws {
@@ -585,6 +663,8 @@ struct ProductionInfo: Codable, Equatable {
         contactNumber = try c.decode(String.self, forKey: .contactNumber)
         crew          = try c.decode([CrewMember].self, forKey: .crew)
         castList      = try c.decode([CastMember].self, forKey: .castList)
+        // Absent on any production saved before this field existed.
+        boilerplateText = try c.decodeIfPresent(String.self, forKey: .boilerplateText) ?? ""
     }
 
     func encode(to encoder: Encoder) throws {
@@ -595,6 +675,7 @@ struct ProductionInfo: Codable, Equatable {
         try c.encode(contactNumber, forKey: .contactNumber)
         try c.encode(crew,          forKey: .crew)
         try c.encode(castList,      forKey: .castList)
+        try c.encode(boilerplateText, forKey: .boilerplateText)
     }
 
     /// A key contact might be in any of three states depending on when the file was saved:

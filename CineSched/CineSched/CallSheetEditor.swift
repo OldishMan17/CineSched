@@ -6,11 +6,23 @@ import SwiftUI
 struct CallSheetEditor: View {
     @Binding var shootDay: ShootDay
     let productionInfo: ProductionInfo
+    /// The nearest prior shoot day (by date) whose basecamp/crew park/hospital list isn't
+    /// all empty — the source for "Copy from Previous Day." Computed by the caller (it needs
+    /// the full shootDays array, which this view doesn't otherwise have); nil when there's no
+    /// usable prior day, in which case that action is hidden rather than shown disabled.
+    var previousDayCallSheet: CallSheetData? = nil
     @Binding var isPresented: Bool
     let onSave: () -> Void
     let onExportPDF: (ShootDay) -> Void
 
     @State private var callTime:     String     = ""
+    @State private var shootingCallTime: String = ""
+    @State private var breakfastTime: String = ""
+    @State private var lunchTime:     String = ""
+    @State private var dinnerTime:    String = ""
+    @State private var basecamp:      String = ""
+    @State private var crewPark:      String = ""
+    @State private var hospitals:     [Hospital] = []
     @State private var locations:    [Location] = []
     @State private var castCharacters: [String] = []   // raw character names, NOT "Actor — Character" text
     @State private var castIsEdited: Bool       = false
@@ -25,6 +37,12 @@ struct CallSheetEditor: View {
     @State private var newLocationName:    String = ""
     @State private var newLocationAddress: String = ""
     @State private var showingAddLocation: Bool   = false
+
+    // New hospital entry
+    @State private var newHospitalName:    String = ""
+    @State private var newHospitalAddress: String = ""
+    @State private var newHospitalPhone:   String = ""
+    @State private var showingAddHospital: Bool   = false
 
     // New cast entry
     @State private var newCastMember: String = ""
@@ -74,6 +92,26 @@ struct CallSheetEditor: View {
                     sectionHeader("General Call Time", icon: "clock")
                     TextField("e.g. 7:00 AM", text: $callTime)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
+
+                    Divider()
+
+                    // Shooting Call — distinct from crew call: crew call is when everyone
+                    // arrives, shooting call is when the camera actually rolls.
+                    sectionHeader("Shooting Call", icon: "video")
+                    TextField("e.g. 8:00 AM", text: $shootingCallTime)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+
+                    Divider()
+
+                    // Meal Times — plain text, not time pickers: real call sheets use ranges
+                    // ("0600–0700") or free text ("COME HAVING HAD") here just as often as a
+                    // single clock time (CALLSHEET_SPEC.md §2.1).
+                    sectionHeader("Meal Times", icon: "fork.knife")
+                    VStack(alignment: .leading, spacing: 8) {
+                        LabeledTextField("Breakfast", placeholder: "e.g. 0600–0700, or COME HAVING HAD", text: $breakfastTime)
+                        LabeledTextField("Lunch",     placeholder: "e.g. 1300 (½ hr)",                   text: $lunchTime)
+                        LabeledTextField("Dinner",    placeholder: "optional",                           text: $dinnerTime)
+                    }
 
                     Divider()
 
@@ -133,6 +171,97 @@ struct CallSheetEditor: View {
                     } else {
                         Button { showingAddLocation = true } label: {
                             Label("Add Location", systemImage: "plus.circle").font(.callout)
+                        }
+                        .buttonStyle(.plain).foregroundColor(.blue)
+                    }
+
+                    Divider()
+
+                    // Basecamp / Crew Park / Hospitals — usually identical across consecutive
+                    // days at one location, so "Copy from Previous Day" carries all three
+                    // forward at once rather than making every day retype them. Shooting call
+                    // and meal times above are deliberately NOT part of this action — those
+                    // genuinely change day to day.
+                    HStack {
+                        sectionHeader("Basecamp, Crew Park & Hospitals", icon: "cross.case")
+                        Spacer()
+                        if let previous = previousDayCallSheet {
+                            Button {
+                                basecamp  = previous.basecamp
+                                crewPark  = previous.crewPark
+                                hospitals = previous.hospitals
+                            } label: {
+                                Label("Copy from Previous Day", systemImage: "arrow.turn.down.right")
+                                    .font(.caption)
+                            }
+                            .buttonStyle(.plain).foregroundColor(.blue)
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        LabeledTextField("Basecamp",  placeholder: "e.g. North lot — park as directed", text: $basecamp)
+                        LabeledTextField("Crew Park", placeholder: "e.g. Example Road, east side",       text: $crewPark)
+                    }
+
+                    if hospitals.isEmpty {
+                        Text("No hospitals added yet.").font(.caption).foregroundColor(.secondary)
+                    } else {
+                        ForEach(Array(hospitals.enumerated()), id: \.element.id) { index, hospital in
+                            HStack(alignment: .top, spacing: 8) {
+                                Text("\(index + 1).")
+                                    .font(.caption).foregroundColor(.secondary)
+                                    .frame(width: 16, alignment: .trailing).padding(.top, 2)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(hospital.name.isEmpty ? "Unnamed Hospital" : hospital.name).fontWeight(.medium)
+                                    if !hospital.address.isEmpty {
+                                        Text(hospital.address).font(.caption).foregroundColor(.secondary)
+                                    }
+                                    if !hospital.phone.isEmpty {
+                                        Text(hospital.phone).font(.caption).foregroundColor(.secondary)
+                                    }
+                                }
+                                Spacer()
+                                Button { hospitals.remove(at: index) } label: {
+                                    Image(systemName: "minus.circle").foregroundColor(.red)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                            .padding(8)
+                            .background(Color.gray.opacity(0.08))
+                            .cornerRadius(6)
+                        }
+                    }
+
+                    if showingAddHospital {
+                        VStack(alignment: .leading, spacing: 8) {
+                            TextField("Hospital name", text: $newHospitalName)
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                            TextField("Address", text: $newHospitalAddress)
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                            TextField("Phone", text: $newHospitalPhone)
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                            HStack {
+                                Button("Cancel") {
+                                    newHospitalName = ""; newHospitalAddress = ""; newHospitalPhone = ""; showingAddHospital = false
+                                }
+                                .buttonStyle(.bordered)
+                                Spacer()
+                                Button("Add Hospital") {
+                                    guard !newHospitalName.isEmpty else { return }
+                                    hospitals.append(Hospital(name: newHospitalName, address: newHospitalAddress, phone: newHospitalPhone))
+                                    newHospitalName = ""; newHospitalAddress = ""; newHospitalPhone = ""; showingAddHospital = false
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(newHospitalName.isEmpty)
+                            }
+                        }
+                        .padding(10)
+                        .background(Color.blue.opacity(0.05))
+                        .cornerRadius(8)
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.blue.opacity(0.2), lineWidth: 1))
+                    } else {
+                        Button { showingAddHospital = true } label: {
+                            Label("Add Hospital", systemImage: "plus.circle").font(.callout)
                         }
                         .buttonStyle(.plain).foregroundColor(.blue)
                     }
@@ -309,10 +438,29 @@ struct CallSheetEditor: View {
         Label(title, systemImage: icon).font(.headline).foregroundColor(.primary)
     }
 
+    /// A small labeled text field for a single line item within a section (meal times,
+    /// basecamp, crew park) — lighter-weight than a whole sectionHeader for fields that
+    /// share one section together.
+    @ViewBuilder
+    private func LabeledTextField(_ label: String, placeholder: String, text: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label).font(.caption).foregroundColor(.secondary)
+            TextField(placeholder, text: text)
+                .textFieldStyle(RoundedBorderTextFieldStyle())
+        }
+    }
+
     // MARK: - Populate / save
 
     private func populateFields() {
-        callTime  = shootDay.callSheet.generalCallTime
+        callTime         = shootDay.callSheet.generalCallTime
+        shootingCallTime = shootDay.callSheet.shootingCallTime
+        breakfastTime    = shootDay.callSheet.breakfastTime
+        lunchTime        = shootDay.callSheet.lunchTime
+        dinnerTime       = shootDay.callSheet.dinnerTime
+        basecamp         = shootDay.callSheet.basecamp
+        crewPark         = shootDay.callSheet.crewPark
+        hospitals        = shootDay.callSheet.hospitals
         locations = shootDay.callSheet.locations
         notes     = shootDay.callSheet.notes
 
@@ -345,7 +493,14 @@ struct CallSheetEditor: View {
     }
 
     private func saveToDay() {
-        shootDay.callSheet.generalCallTime = callTime
+        shootDay.callSheet.generalCallTime  = callTime
+        shootDay.callSheet.shootingCallTime = shootingCallTime
+        shootDay.callSheet.breakfastTime    = breakfastTime
+        shootDay.callSheet.lunchTime        = lunchTime
+        shootDay.callSheet.dinnerTime       = dinnerTime
+        shootDay.callSheet.basecamp         = basecamp
+        shootDay.callSheet.crewPark         = crewPark
+        shootDay.callSheet.hospitals        = hospitals
         shootDay.callSheet.locations       = locations
         shootDay.callSheet.notes           = notes
         shootDay.callSheet.castOverride    = castIsEdited ? castCharacters : nil

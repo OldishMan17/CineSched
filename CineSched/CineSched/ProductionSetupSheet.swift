@@ -18,6 +18,7 @@ struct ProductionSetupSheet: View {
     @State private var contactNumber: String = ""
     @State private var castList:      [CastMember] = []
     @State private var crew:          [CrewMember] = []
+    @State private var boilerplateText: String = ""
 
     @State private var newActorName:          String = ""
     @State private var availabilityEditorIndex: Int? = nil
@@ -67,6 +68,15 @@ struct ProductionSetupSheet: View {
                         LabeledKeyContactField("Producer", placeholder: "e.g. Jamie Rivera",
                                                 contact: $producer, showingContacts: $showingProducerContacts)
                         LabeledField("Contact Number",     placeholder: "e.g. 555-867-5309",  text: $contactNumber)
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Boilerplate / Rules").font(.subheadline).foregroundColor(.secondary)
+                            TextEditor(text: $boilerplateText)
+                                .frame(minHeight: 80).font(.body)
+                                .border(Color.gray.opacity(0.3), width: 1).cornerRadius(4)
+                            Text("Safety/conduct rules printed on every call sheet — no forced calls, visitor policy, harassment-free workplace statement, etc. Set once here rather than retyped per day.")
+                                .font(.caption).foregroundColor(.secondary)
+                        }
                     }
 
                     Divider()
@@ -290,12 +300,13 @@ struct ProductionSetupSheet: View {
                         }
                     }
 
-                    productionInfo.companyName   = companyName
-                    productionInfo.director      = director
-                    productionInfo.producer      = producer
-                    productionInfo.contactNumber = contactNumber
-                    productionInfo.castList      = castList
-                    productionInfo.crew          = crew
+                    productionInfo.companyName     = companyName
+                    productionInfo.director        = director
+                    productionInfo.producer        = producer
+                    productionInfo.contactNumber   = contactNumber
+                    productionInfo.castList        = castList
+                    productionInfo.crew            = crew
+                    productionInfo.boilerplateText = boilerplateText
                     onSave()
                     isPresented = false
                 }
@@ -305,12 +316,13 @@ struct ProductionSetupSheet: View {
         }
         .frame(width: 580, height: 700)
         .onAppear {
-            companyName   = productionInfo.companyName
-            director      = productionInfo.director
-            producer      = productionInfo.producer
-            contactNumber = productionInfo.contactNumber
-            castList      = productionInfo.castList
-            crew          = productionInfo.crew
+            companyName     = productionInfo.companyName
+            director        = productionInfo.director
+            producer        = productionInfo.producer
+            contactNumber   = productionInfo.contactNumber
+            castList        = productionInfo.castList
+            crew            = productionInfo.crew
+            boilerplateText = productionInfo.boilerplateText
         }
     }
 

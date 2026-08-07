@@ -378,12 +378,28 @@ struct CompactMonthCalendarView: View {
 
     // MARK: - Call Sheet Editor
 
+    /// Nearest prior day (by date) whose basecamp/crew park/hospital list isn't all
+    /// empty — the source CallSheetEditor's "Copy from Previous Day" pulls from. Skips days
+    /// that have nothing to offer (e.g. an empty gap day) rather than always using the
+    /// literal day before, so the action reaches back to the last day that actually set
+    /// these up even across an off day or two.
+    private func previousDayCallSheet(before day: ShootDay) -> CallSheetData? {
+        shootDays
+            .filter { $0.date < day.date }
+            .sorted { $0.date > $1.date }
+            .first {
+                !$0.callSheet.basecamp.isEmpty || !$0.callSheet.crewPark.isEmpty || !$0.callSheet.hospitals.isEmpty
+            }
+            .map { $0.callSheet }
+    }
+
     @ViewBuilder
     private func callSheetEditorContent(for day: ShootDay) -> some View {
         if let idx = shootDays.firstIndex(where: { $0.id == day.id }) {
             CallSheetEditor(
                 shootDay: $shootDays[idx],
                 productionInfo: productionInfo,
+                previousDayCallSheet: previousDayCallSheet(before: day),
                 isPresented: Binding(
                     get: { callSheetDay != nil },
                     set: { if !$0 { callSheetDay = nil } }

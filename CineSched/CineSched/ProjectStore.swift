@@ -470,7 +470,8 @@ extension ContentView {
         guard let pdfData = CallSheetExporter.generatePDF(
             shootDay: day,
             productionInfo: productionInfo,
-            projectTitle: projectTitle
+            projectTitle: projectTitle,
+            shootDays: shootDays
         ) else {
             alertMessage = "Failed to generate call sheet PDF."
             showingAlert = true
