@@ -13,6 +13,51 @@ extension UTType {
     static var fdx: UTType { UTType(importedAs: "com.finaldraft.fdx") }
 }
 
+// MARK: - Script drag-and-drop
+
+/// Highlights the window and accepts a dropped .fdx/.fountain file. Kept as its own
+/// ViewModifier rather than inline .overlay/.dropDestination calls on ContentView's body
+/// because attaching them directly there overwhelmed the type-checker on that already-long
+/// modifier chain — isolating them into their own `body(content:)` keeps that inference local.
+private struct ScriptDropModifier: ViewModifier {
+    @Binding var isTargeted: Bool
+    let onDrop: ([URL]) -> Bool
+
+    func body(content: Content) -> some View {
+        content
+            .overlay {
+                if isTargeted {
+                    Rectangle()
+                        .stroke(Color.accentColor, lineWidth: 4)
+                        .allowsHitTesting(false)
+                }
+            }
+            .dropDestination(for: URL.self) { urls, _ in
+                onDrop(urls)
+            } isTargeted: { targeted in
+                isTargeted = targeted
+            }
+    }
+}
+
+/// Confirmation alert shown after a .fdx/.fountain file is parsed, before the resulting
+/// scenes are added to the project — "Import" commits them, "Cancel" discards them.
+private struct ImportConfirmAlertModifier: ViewModifier {
+    @Binding var isPresented: Bool
+    let message: String
+    let onConfirm: () -> Void
+    let onCancel: () -> Void
+
+    func body(content: Content) -> some View {
+        content.alert("Import Script", isPresented: $isPresented) {
+            Button("Cancel", role: .cancel) { onCancel() }
+            Button("Import") { onConfirm() }
+        } message: {
+            Text(message)
+        }
+    }
+}
+
 // MARK: - ContentView
 
 struct ContentView: View {
@@ -46,12 +91,16 @@ struct ContentView: View {
 
     @State var showingAlert             = false
     @State var showingImportAlert       = false
+    @State var showingImportConfirm     = false
     @State private var showingClearAllConfirmation = false
     @State private var showingUnscheduledSceneEditSheet = false
 
     @State var alertMessage:   String = ""
     @State var importMessage:  String = ""
     @State private var importedScenesCount = 0
+    // Scenes parsed from a .fdx/.fountain import, staged until the user confirms via
+    // the Import Script alert's "Import" button (or discarded on "Cancel").
+    @State var pendingImportScenes: [Scene] = []
 
     // Unscheduled-scene editing
     @State private var editingUnscheduledScene:      Scene?
@@ -108,6 +157,9 @@ struct ContentView: View {
     // Highlights the Boneyard while a scene dragged out of the calendar is hovering over it.
     @State private var isBoneyardDropTargeted = false
 
+    // Highlights the whole window while a script file dragged in from Finder is hovering over it.
+    @State private var isScriptDropTargeted = false
+
     // MARK: - Computed statistics
 
     private var scheduledDays: [ShootDay] { shootDays.filter { !$0.scenes.isEmpty } }
@@ -124,6 +176,12 @@ struct ContentView: View {
     private var isSidebarCollapsed: Bool { columnVisibility == .detailOnly }
 
     var body: some View {
+        // Split into two chained expressions (`base` then the return below) rather than one
+        // giant chain — even with the alert/drop logic pulled into their own ViewModifiers,
+        // the type-checker still hit "unable to type-check this expression in reasonable
+        // time" on the full chain in one piece. Splitting it here keeps each half small
+        // enough for Swift to infer independently.
+        let base =
         NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebarView
                 // Caps how wide the sidebar can be dragged. Without a max, the sidebar
@@ -134,6 +192,14 @@ struct ContentView: View {
         } detail: {
             detailView
         }
+        // Lets a .fdx or .fountain file be dropped anywhere in the window to import it —
+        // the same importScript(from:) path the toolbar's Import Script button uses, so
+        // drag-and-drop and the file picker always agree on parsing/estimation behavior.
+        // Pulled into its own ViewModifier (rather than inline .overlay/.dropDestination
+        // calls here) because adding them directly to this already-long modifier chain
+        // blew past the type-checker's time budget ("unable to type-check in reasonable
+        // time") — isolating it into its own `body(content:)` keeps that inference local.
+        .modifier(ScriptDropModifier(isTargeted: $isScriptDropTargeted, onDrop: handleScriptDrop))
         // The sidebar's open/close animation was racing against this window's custom
         // toolbar mid-slide, which crashed macOS's own layout system (a window-layout
         // watchdog killing the app after too many back-to-back relayouts). Turning off
@@ -148,7 +214,18 @@ struct ContentView: View {
         .frame(minWidth: 1050, minHeight: 600)
         .preferredColorScheme(isDarkMode ? .dark : .light)
         .alert("Script Import",  isPresented: $showingImportAlert) { Button("OK") {} } message: { Text(importMessage) }
+        // Pulled into its own ViewModifier — attaching this .alert inline here (like the
+        // one above it) blew past the type-checker's time budget on this already-long
+        // modifier chain, same issue the drag-and-drop work hit earlier.
+        .modifier(ImportConfirmAlertModifier(
+            isPresented: $showingImportConfirm,
+            message: importMessage,
+            onConfirm: confirmPendingScriptImport,
+            onCancel: cancelPendingScriptImport
+        ))
         .alert("CineSched",      isPresented: $showingAlert)        { Button("OK") {} } message: { Text(alertMessage) }
+
+        return base
         .confirmationDialog("Clear All Scenes", isPresented: $showingClearAllConfirmation, titleVisibility: .visible) {
             Button("Clear All", role: .destructive) { clearAllScenes() }
             Button("Cancel",    role: .cancel)      {}
@@ -194,7 +271,7 @@ struct ContentView: View {
             loadProject(from: url)
         }
         .onReceive(NotificationCenter.default.publisher(for: .csImportScript)) { _ in
-            showFDXOpenPanel()
+            showScriptOpenPanel()
         }
         .onReceive(NotificationCenter.default.publisher(for: .csSaveProject)) { _ in
             saveProject()
@@ -238,6 +315,16 @@ struct ContentView: View {
         .toolbar { mainToolbar }
     }
 
+    /// Handles a .fdx/.fountain file dropped anywhere on the window, via the same
+    /// importScript(from:) path the toolbar's Import Script button uses.
+    private func handleScriptDrop(_ urls: [URL]) -> Bool {
+        guard let url = urls.first else { return false }
+        let ext = url.pathExtension.lowercased()
+        guard ext == "fdx" || ext == "fountain" else { return false }
+        importScript(from: url)
+        return true
+    }
+
     // MARK: - Toolbar
 
     // Each button pairs an SF Symbol with its label via Label(...), so the icon stays
@@ -274,11 +361,11 @@ struct ContentView: View {
 
         ToolbarItem(id: "importScript", placement: .automatic) {
             Button {
-                showFDXOpenPanel()
+                showScriptOpenPanel()
             } label: {
                 Label("Import Script", systemImage: "document.badge.plus")
             }
-            .help("Import Script — import scenes from a Final Draft .fdx file")
+            .help("Import Script — import scenes from a Final Draft .fdx or Fountain .fountain file")
         }
 
         ToolbarItem(id: "save", placement: .automatic) {
@@ -474,6 +561,17 @@ struct ContentView: View {
             return true
         } isTargeted: { targeted in
             isBoneyardDropTargeted = targeted
+        }
+        // A script file (.fdx/.fountain) dropped anywhere on this ScrollView needs its
+        // own dropDestination here too, alongside the String one above — a dropDestination
+        // further up the view tree (on the whole window) does not reliably receive drags
+        // that land on a pane which already has its own dropDestination for a different
+        // payload type, per the note above this same view had to be moved for the boneyard
+        // drop to register reliably at all.
+        .dropDestination(for: URL.self) { urls, _ in
+            handleScriptDrop(urls)
+        } isTargeted: { targeted in
+            isScriptDropTargeted = targeted
         }
         .frame(minWidth: 300, maxHeight: .infinity)
     }
@@ -786,6 +884,16 @@ struct ContentView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding()
+        // Registered directly on this pane (not just once on the outer window in
+        // ScriptDropModifier) for the same reason the sidebar needs its own copy: the
+        // calendar underneath has its own onDrop delegates for reordering scenes, and a
+        // dropDestination higher up the view tree doesn't reliably receive drags that land
+        // on a pane which already has its own drop handling for a different payload type.
+        .dropDestination(for: URL.self) { urls, _ in
+            handleScriptDrop(urls)
+        } isTargeted: { targeted in
+            isScriptDropTargeted = targeted
+        }
     }
 
     // MARK: - Toolbar row

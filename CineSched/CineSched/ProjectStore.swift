@@ -324,18 +324,19 @@ extension ContentView {
         }
     }
 
-    func showFDXOpenPanel() {
+    func showScriptOpenPanel() {
         let panel = NSOpenPanel()
-        panel.title                = "Import Final Draft Script"
+        panel.title                = "Import Script"
         panel.prompt               = "Import"
         // UTType(filenameExtension:) matches by extension alone, so this works whether or
-        // not Final Draft is installed. UTType(importedAs: "com.finaldraft.fdx") — the
-        // previous approach — only actually resolves once Final Draft itself registers
-        // that type with macOS, so on a machine without Final Draft, .fdx files would show
-        // up grayed out and unselectable in this panel even though the parser below has
-        // never depended on Final Draft being present at all.
+        // not Final Draft (or any Fountain-aware app) is installed. UTType(importedAs:) —
+        // the previous approach for .fdx — only actually resolves once some installed app
+        // registers that type with macOS, so on a machine without Final Draft, .fdx files
+        // would show up grayed out and unselectable even though the parser below has never
+        // depended on Final Draft being present at all. Same reasoning covers .fountain.
         var allowedTypes: [UTType] = []
         if let fdxType = UTType(filenameExtension: "fdx") { allowedTypes.append(fdxType) }
+        if let fountainType = UTType(filenameExtension: "fountain") { allowedTypes.append(fountainType) }
         allowedTypes.append(.xml)
         panel.allowedContentTypes  = allowedTypes
         panel.allowsMultipleSelection = false
@@ -344,45 +345,71 @@ extension ContentView {
         panel.begin { [self] response in
             DispatchQueue.main.async {
                 guard response == .OK, let url = panel.url else { return }
-                self.importFDXScript(from: url)
+                self.importScript(from: url)
             }
         }
     }
 
-    func importFDXScript(from url: URL) {
-        guard url.startAccessingSecurityScopedResource() else {
-            importMessage = "Unable to access the selected file."
-            showingImportAlert = true
-            return
-        }
-        defer { url.stopAccessingSecurityScopedResource() }
+    /// Parses either a Final Draft (.fdx) or Fountain (.fountain) script and stages the
+    /// result for confirmation — nothing is added to the project yet. Both parsers converge
+    /// on the same FinalDraftParser.ParsedScene shape (scene number, location, time of day,
+    /// page eighths, estimated minutes), so scene creation is one shared path regardless of
+    /// source format. The actual import only happens if the user confirms via
+    /// confirmPendingScriptImport(); cancelPendingScriptImport() discards it untouched.
+    func importScript(from url: URL) {
+        // Best-effort: startAccessingSecurityScopedResource() only returns true for a
+        // security-scoped bookmark URL, which is what NSOpenPanel hands back. A URL
+        // dropped in from Finder via SwiftUI's dropDestination isn't that kind of URL —
+        // the drag-and-drop itself already grants sandbox read access — so it legitimately
+        // returns false there even though the file is perfectly readable. Treating that as
+        // a hard failure (as this used to) produced a false "unable to access" alert on
+        // every drag-and-drop import. Only stop the scope if starting it actually succeeded.
+        let didStartScope = url.startAccessingSecurityScopedResource()
+        defer { if didStartScope { url.stopAccessingSecurityScopedResource() } }
 
         do {
-            let parsed = try FinalDraftParser.parseScenes(from: url)
+            let parsed: [FinalDraftParser.ParsedScene]
+            if url.pathExtension.lowercased() == "fountain" {
+                parsed = try FountainParser.parseScenes(from: url)
+            } else {
+                parsed = try FinalDraftParser.parseScenes(from: url)
+            }
             guard !parsed.isEmpty else {
                 importMessage = "No scenes found in the script."
                 showingImportAlert = true
                 return
             }
-            var count = 0
-            for ps in parsed {
+            let scenes = parsed.map { ps -> Scene in
                 let type: DayNightType = ps.timeOfDay == .night ? .night : .day
-                allScenes.append(Scene(
+                return Scene(
                     title:         "\(ps.sceneNumber). \(ps.location)",
-                    duration:      1,
-                    estimatedTime: 15,
+                    duration:      ps.pageEighths,
+                    estimatedTime: ps.estimatedMinutes,
                     dayNightType:  type,
                     sceneNumber:   ps.sceneNumber
-                ))
-                count += 1
+                )
             }
-            markDirty()
-            importMessage = "Imported \(count) scene\(count == 1 ? "" : "s") from '\(url.lastPathComponent)'.\n\nScenes added to Boneyard with default values (1/8 page, 15 min). Edit before scheduling."
-            showingImportAlert = true
+            pendingImportScenes = scenes
+            let count = scenes.count
+            importMessage = "Import \(count) scene\(count == 1 ? "" : "s") from '\(url.lastPathComponent)'?\n\nPage counts and time estimates are calculated from each scene's script text — double-check them and edit after importing."
+            showingImportConfirm = true
         } catch {
             importMessage = "Failed to import script: \(error.localizedDescription)"
             showingImportAlert = true
         }
+    }
+
+    /// Commits the scenes staged by importScript(from:) into the project.
+    func confirmPendingScriptImport() {
+        guard !pendingImportScenes.isEmpty else { return }
+        allScenes.append(contentsOf: pendingImportScenes)
+        markDirty()
+        pendingImportScenes = []
+    }
+
+    /// Discards the scenes staged by importScript(from:) — no project changes.
+    func cancelPendingScriptImport() {
+        pendingImportScenes = []
     }
 
     // MARK: - PDF exports (NSSavePanel)
