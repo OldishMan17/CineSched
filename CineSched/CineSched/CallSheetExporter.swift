@@ -94,9 +94,13 @@ class CallSheetExporter {
         // Page 2 always starts on its own page — a call sheet is genuinely front/back, not
         // "whatever fits after page 1," even on a light day where page 1 ends up short.
         cursor.startNewPage()
-        drawCrewListTitle(cursor: cursor, shootDay: shootDay, projectTitle: projectTitle,
-                           dayNumber: dayNumber, totalDays: totalDays)
-        drawCrewTable(cursor: cursor, productionInfo: productionInfo)
+        // No crew at all yet — omit the crew list title and table entirely rather than
+        // printing an empty table with a sentence explaining nobody's been added.
+        if !productionInfo.crew.isEmpty {
+            drawCrewListTitle(cursor: cursor, shootDay: shootDay, projectTitle: projectTitle,
+                               dayNumber: dayNumber, totalDays: totalDays)
+            drawCrewTable(cursor: cursor, productionInfo: productionInfo)
+        }
         drawDepartmentNotes(cursor: cursor)
         drawHospitalBlock(cursor: cursor, shootDay: shootDay)
         drawAdvanceSchedule(cursor: cursor, shootDay: shootDay, shootDays: shootDays, castIDs: castIDs)
@@ -191,12 +195,15 @@ class CallSheetExporter {
         // Column A — key personnel. No production-office-address field exists in the data
         // model, so this is personnel only (Director/Producer), not the full "office info +
         // personnel" stack the layout doc shows — nothing to placeholder here since the
-        // fields genuinely aren't in the model.
+        // fields genuinely aren't in the model. If neither is set yet, the column is simply
+        // left blank rather than explaining that — a blank column reads as "nothing here,"
+        // not as the app announcing an unfinished feature.
         var colALines: [NSAttributedString] = []
-        colALines.append(labelValue("DIRECTOR", productionInfo.director.name))
-        colALines.append(labelValue("PRODUCER", productionInfo.producer.name))
-        if colALines.allSatisfy({ $0.string.isEmpty }) {
-            colALines = [plain("No key personnel set in Production Setup.", font: fontHeadValue, color: colorMid)]
+        if !productionInfo.director.name.isEmpty {
+            colALines.append(labelValue("DIRECTOR", productionInfo.director.name))
+        }
+        if !productionInfo.producer.name.isEmpty {
+            colALines.append(labelValue("PRODUCER", productionInfo.producer.name))
         }
 
         // Column B — date, day-of-days. Land acknowledgment has no field; omitted rather
@@ -282,30 +289,13 @@ class CallSheetExporter {
 
     // MARK: - Block 4: Weather strip
 
-    /// CineSched doesn't track weather data yet — every value here is a placeholder ("—"),
-    /// per the task's explicit instruction not to block page 1 on that. The 8-column
-    /// structure itself is real (matches CALLSHEET_LAYOUT.md §2 block 4 exactly).
+    /// CineSched doesn't track weather data at all yet, so this block is omitted rather than
+    /// printed as a full row of "—" placeholders — a strip of 8 empty columns reads as the
+    /// app pointing out something it can't do, where a real lean call sheet just wouldn't
+    /// have the block. Once real weather data exists, this can render the actual 8-column
+    /// strip (structure already scoped out in CALLSHEET_LAYOUT.md §2 block 4).
     private static func drawWeatherStrip(cursor: PageCursor) {
-        let headers = ["SUNRISE", "SUNSET", "WEATHER", "WIND", "GUSTS", "HI", "LO", "POP"]
-        let colWidth = usableWidth / 8
-        let widths = Array(repeating: colWidth, count: 8)
-
-        drawTableHeaderRow(cursor: cursor, widths: widths, titles: headers)
-
-        let valueHeight: CGFloat = 13
-        cursor.ensureSpace(valueHeight)
-        let top = cursor.y
-        let rect = CGRect(x: margin, y: top - valueHeight, width: usableWidth, height: valueHeight)
-
-        var cx = margin
-        for _ in headers {
-            let cellRect = CGRect(x: cx, y: top - valueHeight, width: colWidth, height: valueHeight)
-            drawCentered("—", font: fontHeadValue, color: colorMid, in: cellRect)
-            strokeRect(cellRect, color: colorRuleLight, width: 0.4)
-            cx += colWidth
-        }
-        strokeRect(rect, color: colorRule, width: 0.8)
-        cursor.y -= valueHeight
+        // Nothing to draw — see doc comment above.
     }
 
     // MARK: - Block 5: Scene schedule table
@@ -554,23 +544,12 @@ class CallSheetExporter {
 
     // MARK: - Block 8: Stand-ins / background
 
-    /// No data source exists for stand-ins/photo doubles/background yet. Per the task's
-    /// explicit instruction, this still draws the full 6-column structure from
-    /// CALLSHEET_LAYOUT.md §4.2 so the page holds together, just with an empty/placeholder
-    /// body rather than a data row.
+    /// No data source exists for stand-ins/photo doubles/background yet — omitted entirely
+    /// rather than printing the 6-column CALLSHEET_LAYOUT.md §4.2 structure with a sentence
+    /// explaining it's empty. A real call sheet with nothing to say here just doesn't have
+    /// the block; once real data exists, this can render the actual table.
     private static func drawStandInsBlock(cursor: PageCursor) {
-        let titles = ["STAND-INS", "CALL", "ON SET", "BACKGROUND", "CALL", "ON SET"]
-        let colWidth = usableWidth / 6
-        let widths = Array(repeating: colWidth, count: 6)
-        drawTableHeaderRow(cursor: cursor, widths: widths, titles: titles)
-
-        let rowHeight: CGFloat = 14
-        cursor.ensureSpace(rowHeight)
-        let rect = CGRect(x: margin, y: cursor.y - rowHeight, width: usableWidth, height: rowHeight)
-        drawCentered("Not yet tracked in CineSched — no stand-in / background data source.",
-                     font: fontBody, color: colorMid, in: rect)
-        strokeRect(rect, color: colorRuleLight, width: 0.4)
-        cursor.y -= rowHeight
+        // Nothing to draw — see doc comment above.
     }
 
     // MARK: - Page 2, Block 9: Crew list title
@@ -637,10 +616,10 @@ class CallSheetExporter {
             .filter { !$0.members.isEmpty }
             .sorted { $0.kind.sortIndex < $1.kind.sortIndex }
 
-        guard !departments.isEmpty else {
-            drawCrewEmptyRow(cursor: cursor, totalWidth: allWidths.reduce(0, +))
-            return
-        }
+        // Defensive: generatePDF only calls drawCrewTable when productionInfo.crew is
+        // non-empty, so departments can't actually be empty here — but if this is ever
+        // called directly, do nothing rather than print an empty table.
+        guard !departments.isEmpty else { return }
 
         // Each department becomes one block of rows (a header row + one row per member) that
         // must never be split across two columns — CALLSHEET_LAYOUT.md §4.3: "compute the
@@ -764,15 +743,6 @@ class CallSheetExporter {
         }.max() ?? 0
     }
 
-    private static func drawCrewEmptyRow(cursor: PageCursor, totalWidth: CGFloat) {
-        let rowHeight: CGFloat = 14
-        cursor.ensureSpace(rowHeight)
-        let rect = CGRect(x: margin, y: cursor.y - rowHeight, width: totalWidth, height: rowHeight)
-        drawCentered("No crew added in Production Setup.", font: fontBody, color: colorMid, in: rect)
-        strokeRect(rect, color: colorRuleLight, width: 0.4)
-        cursor.y -= rowHeight
-    }
-
     /// Meal counts (CALLSHEET_SPEC.md §2.8: "Crew Breakfast x60, BG Lunch x0") are computed
     /// from the headcount flag's real 0/1 values in a real call sheet — since that flag has
     /// no data source here, this placeholders the counts rather than summing the "1" default
@@ -790,47 +760,48 @@ class CallSheetExporter {
     // MARK: - Page 2, Block 10: Department notes
 
     /// Scene-keyed notes grouped by department (CALLSHEET_SPEC.md §2.7) have no data source
-    /// yet — no per-scene department-notes field exists. Same treatment as page 1's
-    /// stand-ins block: draw the real block structure with a placeholder body instead of
-    /// skipping the block.
+    /// yet — no per-scene department-notes field exists — so this is omitted entirely rather
+    /// than printed as an empty placeholder block. Once a per-scene department-notes field
+    /// exists, this can aggregate and render the real table.
     private static func drawDepartmentNotes(cursor: PageCursor) {
-        drawTableHeaderRow(cursor: cursor, widths: [usableWidth], titles: ["DEPARTMENT REQUIREMENTS"])
-        let rowHeight: CGFloat = 14
-        cursor.ensureSpace(rowHeight)
-        let rect = CGRect(x: margin, y: cursor.y - rowHeight, width: usableWidth, height: rowHeight)
-        drawCentered("Not yet tracked in CineSched — no scene-keyed department notes data source.",
-                     font: fontBody, color: colorMid, in: rect)
-        strokeRect(rect, color: colorRuleLight, width: 0.4)
-        cursor.y -= rowHeight
+        // Nothing to draw — see doc comment above.
     }
 
     // MARK: - Page 2, Block 11: Nearest hospital + emergency
 
-    /// Left column uses the day's real hospital list (CallSheetEditor → Basecamp, Crew Park
-    /// & Hospitals) once entries exist, falling back to the placeholder when the list is
-    /// empty — same convention as every other not-yet-entered field. The emergency-contact
-    /// column has no data source at all yet (no field for set medic / production safety
-    /// contacts), so it stays a placeholder either way.
+    /// EMERGENCY: 911 always renders — genuinely universal, not something that depends on
+    /// CineSched tracking anything. The "nearest hospital" section only appears once the
+    /// day's hospital list has real entries; when it's empty, the block collapses to a
+    /// single "EMERGENCY: 911" line rather than a hospital section explaining that it isn't
+    /// tracked. Set medic / production safety contacts have no data source at all yet, so
+    /// that line is simply left out rather than explained either way.
     private static func drawHospitalBlock(cursor: PageCursor, shootDay: ShootDay) {
+        let hospitals = shootDay.callSheet.hospitals
+
+        guard !hospitals.isEmpty else {
+            let rowHeight: CGFloat = 16
+            cursor.ensureSpace(rowHeight)
+            let rect = CGRect(x: margin, y: cursor.y - rowHeight, width: usableWidth, height: rowHeight)
+            drawCentered("EMERGENCY: 911", font: NSFont.boldSystemFont(ofSize: 8), color: colorBlack, in: rect)
+            strokeRect(rect, color: colorRule, width: 0.8)
+            cursor.y -= rowHeight
+            return
+        }
+
         let colWidth = usableWidth / 2
         let widths = [colWidth, usableWidth - colWidth]
 
         var hospitalLines: [NSAttributedString] = [plain("NEAREST HOSPITAL", font: NSFont.boldSystemFont(ofSize: 7.5), color: colorBlack)]
-        if shootDay.callSheet.hospitals.isEmpty {
-            hospitalLines.append(plain("Not yet tracked in CineSched.", font: fontHeadValue, color: colorMid))
-        } else {
-            for hospital in shootDay.callSheet.hospitals {
-                let name = hospital.name.isEmpty ? "Unnamed Hospital" : hospital.name
-                hospitalLines.append(plain(name, font: fontHeadValue, color: colorDark))
-                let detail = [hospital.address, hospital.phone].filter { !$0.isEmpty }.joined(separator: "   —   ")
-                if !detail.isEmpty {
-                    hospitalLines.append(plain(detail, font: fontHeadValue, color: colorMid))
-                }
+        for hospital in hospitals {
+            let name = hospital.name.isEmpty ? "Unnamed Hospital" : hospital.name
+            hospitalLines.append(plain(name, font: fontHeadValue, color: colorDark))
+            let detail = [hospital.address, hospital.phone].filter { !$0.isEmpty }.joined(separator: "   —   ")
+            if !detail.isEmpty {
+                hospitalLines.append(plain(detail, font: fontHeadValue, color: colorMid))
             }
         }
         let emergencyLines: [NSAttributedString] = [
-            plain("EMERGENCY: 911", font: NSFont.boldSystemFont(ofSize: 7.5), color: colorBlack),
-            plain("Set medic / production safety contacts not yet tracked in CineSched.", font: fontHeadValue, color: colorMid)
+            plain("EMERGENCY: 911", font: NSFont.boldSystemFont(ofSize: 7.5), color: colorBlack)
         ]
 
         let cellLines = [hospitalLines, emergencyLines]
