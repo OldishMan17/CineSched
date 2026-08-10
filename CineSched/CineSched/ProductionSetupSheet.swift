@@ -19,6 +19,7 @@ struct ProductionSetupSheet: View {
     @State private var castList:      [CastMember] = []
     @State private var crew:          [CrewMember] = []
     @State private var boilerplateText: String = ""
+    @State private var printCrewContactInfo: Bool = true
 
     @State private var newActorName:          String = ""
     @State private var availabilityEditorIndex: Int? = nil
@@ -75,6 +76,12 @@ struct ProductionSetupSheet: View {
                                 .frame(minHeight: 80).font(.body)
                                 .border(Color.gray.opacity(0.3), width: 1).cornerRadius(4)
                             Text("Safety/conduct rules printed on every call sheet — no forced calls, visitor policy, harassment-free workplace statement, etc. Set once here rather than retyped per day.")
+                                .font(.caption).foregroundColor(.secondary)
+                        }
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Toggle("Print crew contact info on call sheet", isOn: $printCrewContactInfo)
+                            Text("Shows each crew member's phone/email in the call sheet's crew table. Indie and student productions usually want this on since there's no separate crew list — union productions typically leave it off and distribute contacts separately.")
                                 .font(.caption).foregroundColor(.secondary)
                         }
                     }
@@ -307,6 +314,7 @@ struct ProductionSetupSheet: View {
                     productionInfo.castList        = castList
                     productionInfo.crew            = crew
                     productionInfo.boilerplateText = boilerplateText
+                    productionInfo.printCrewContactInfo = printCrewContactInfo
                     onSave()
                     isPresented = false
                 }
@@ -323,6 +331,7 @@ struct ProductionSetupSheet: View {
             castList        = productionInfo.castList
             crew            = productionInfo.crew
             boilerplateText = productionInfo.boilerplateText
+            printCrewContactInfo = productionInfo.printCrewContactInfo
         }
     }
 

@@ -43,7 +43,6 @@ class CallSheetExporter {
     }()
     private static let fontBanner     = NSFont.boldSystemFont(ofSize: 8)
     private static let fontBannerNote = NSFont.systemFont(ofSize: 7)
-    private static let fontCaption    = NSFont.systemFont(ofSize: 6.5)
 
     private static let colorBlack     = NSColor.black
     private static let colorDark      = NSColor(white: 0.12, alpha: 1)
@@ -99,7 +98,16 @@ class CallSheetExporter {
         if !productionInfo.crew.isEmpty {
             drawCrewListTitle(cursor: cursor, shootDay: shootDay, projectTitle: projectTitle,
                                dayNumber: dayNumber, totalDays: totalDays)
-            drawCrewTable(cursor: cursor, productionInfo: productionInfo)
+            // Two genuinely different layouts, not one grid with a column toggled on/off:
+            // contact info needs room for phone AND email per person, which doesn't fit
+            // three sub-columns wide, so it gets its own full-width single-column table;
+            // without it, the existing side-by-side block grid stays, just 2 blocks instead
+            // of 3 so long department names/titles ("ART DEPARTMENT") have room to fit.
+            if productionInfo.printCrewContactInfo {
+                drawCrewTableSingleColumn(cursor: cursor, productionInfo: productionInfo)
+            } else {
+                drawCrewTableGrid(cursor: cursor, productionInfo: productionInfo)
+            }
         }
         drawDepartmentNotes(cursor: cursor)
         drawHospitalBlock(cursor: cursor, shootDay: shootDay)
@@ -572,14 +580,19 @@ class CallSheetExporter {
     // MARK: - Page 2, Block 9: Crew table — the three-block grid
 
     private struct CrewGridColumns {
-        // # | TITLE | NAME | CALL, one block — repeated 3x across the page. Percentages
-        // measured from REFERENCE_CALLSHEET.docx (419, 1152, 1221, 698 dxa per block of
-        // 3490, three blocks = 10469 total).
-        static let widths: [CGFloat] = {
-            let pct: [CGFloat] = [0.0400, 0.1100, 0.1167, 0.0667]
-            return pct.map { $0 * usableWidth }
-        }()
         static let titles = ["#", "TITLE", "NAME", "CALL"]
+
+        /// # / TITLE / NAME / CALL widths for ONE block, sized so `blockCount` blocks span
+        /// the full page — relative proportions between the four sub-columns are preserved
+        /// from the original measurement (REFERENCE_CALLSHEET.docx: 419/1152/1221/698 dxa of
+        /// 10469, a block that was 1 of 3), only each block's total share of the page
+        /// changes. Parameterized per CALLSHEET_LAYOUT.md §4.3's own note that the balancing
+        /// approach — and so the block count — shouldn't be hardcoded (REF-K uses 2 blocks).
+        static func widths(blockCount: Int) -> [CGFloat] {
+            let basePct: [CGFloat] = [0.0400, 0.1100, 0.1167, 0.0667]   // sums to ~1/3 (one of 3 blocks)
+            let scale = (1.0 / CGFloat(blockCount)) / basePct.reduce(0, +)
+            return basePct.map { $0 * scale * usableWidth }
+        }
     }
 
     private enum CrewGridRow {
@@ -587,7 +600,8 @@ class CallSheetExporter {
         case member(CrewMember)
     }
 
-    /// Departments flow down each block, then to the next block — not left to right — per
+    /// Side-by-side block grid — used when "Print crew contact info" is OFF. Departments
+    /// flow down each block, then to the next block — not left to right — per
     /// CALLSHEET_LAYOUT.md §4.3. No call-time-per-crew-member field exists in the data model
     /// yet, so the CALL column is "—" throughout, same placeholder convention page 1 already
     /// uses. The headcount flag (0/1, "not a quantity") also has no source field; every row
@@ -595,9 +609,13 @@ class CallSheetExporter {
     /// unless told otherwise) — but that default is never summed into a real meal-count
     /// total below, since presenting a synthetic sum as a real headcount would be worse than
     /// not showing one at all.
-    private static func drawCrewTable(cursor: PageCursor, productionInfo: ProductionInfo) {
-        let blockCount = 3
-        let blockWidths = CrewGridColumns.widths
+    private static func drawCrewTableGrid(cursor: PageCursor, productionInfo: ProductionInfo) {
+        // 2 blocks (not 3): with no contact info competing for room, this is still a fairly
+        // dense grid, and 2 blocks at ~50% each gives long department names ("ART
+        // DEPARTMENT") and long crew names room to fit without wrapping under normal
+        // circumstances, where 3 blocks at ~33% forced them to.
+        let blockCount = 2
+        let blockWidths = CrewGridColumns.widths(blockCount: blockCount)
         let blockTitles = CrewGridColumns.titles
         let allWidths = Array(repeating: blockWidths, count: blockCount).flatMap { $0 }
         let allTitles = Array(repeating: blockTitles, count: blockCount).flatMap { $0 }
@@ -616,9 +634,9 @@ class CallSheetExporter {
             .filter { !$0.members.isEmpty }
             .sorted { $0.kind.sortIndex < $1.kind.sortIndex }
 
-        // Defensive: generatePDF only calls drawCrewTable when productionInfo.crew is
-        // non-empty, so departments can't actually be empty here — but if this is ever
-        // called directly, do nothing rather than print an empty table.
+        // Defensive: generatePDF only calls this when productionInfo.crew is non-empty, so
+        // departments can't actually be empty here — but if this is ever called directly,
+        // do nothing rather than print an empty table.
         guard !departments.isEmpty else { return }
 
         // Each department becomes one block of rows (a header row + one row per member) that
@@ -642,8 +660,8 @@ class CallSheetExporter {
     /// Greedy longest-processing-time-first bin packing: largest department blocks placed
     /// first, each into whichever column currently has the fewest rows so far — keeps the
     /// columns close to even without ever splitting one department's rows across two of
-    /// them. `columnCount` is a parameter (not hardcoded to 3) per CALLSHEET_LAYOUT.md §4.3's
-    /// own note that REF-K uses 2 blocks instead of 3.
+    /// them. `columnCount` is a parameter (not hardcoded) per CALLSHEET_LAYOUT.md §4.3's own
+    /// note that REF-K uses 2 blocks instead of 3.
     private static func balanceIntoColumns(_ blocks: [[CrewGridRow]], columnCount: Int) -> [[CrewGridRow]] {
         var columns: [[CrewGridRow]] = Array(repeating: [], count: columnCount)
         for block in blocks.sorted(by: { $0.count > $1.count }) {
@@ -656,7 +674,9 @@ class CallSheetExporter {
     /// One block's drawable cells for a row-band slot: either a member's 4 columns, a
     /// department header (name merged across TITLE+NAME), or blank cells when this column
     /// has already run out of content at this row index. Widths carry through so the whole
-    /// band's height can be measured before anything is drawn.
+    /// band's height can be measured before anything is drawn. This grid never shows contact
+    /// info — that's the single-column layout's job (drawCrewTableSingleColumn) — so it's
+    /// always just #/TITLE/NAME/CALL.
     private static func crewBlockCells(row: CrewGridRow?, widths: [CGFloat]) -> [(text: NSAttributedString, width: CGFloat)] {
         func aligned(_ text: String, font: NSFont, color: NSColor, alignment: NSTextAlignment) -> NSAttributedString {
             let para = NSMutableParagraphStyle(); para.alignment = alignment
@@ -677,11 +697,11 @@ class CallSheetExporter {
                 (NSAttributedString(string: ""), widths[3])
             ]
         case .member(let member):
-            let values = ["1", member.role.isEmpty ? "—" : member.role.uppercased(), member.name.uppercased(), "—"]
-            let alignments: [NSTextAlignment] = [.center, .left, .left, .center]
-            return zip(zip(values, widths), alignments).map { pair, alignment in
-                (aligned(pair.0, font: fontBody, color: colorDark, alignment: alignment), pair.1)
-            }
+            let idCell    = aligned("1", font: fontBody, color: colorDark, alignment: .center)
+            let titleCell = aligned(member.role.isEmpty ? "—" : member.role.uppercased(), font: fontBody, color: colorDark, alignment: .left)
+            let nameCell  = aligned(member.name.uppercased(), font: fontBody, color: colorDark, alignment: .left)
+            let callCell  = aligned("—", font: fontBody, color: colorDark, alignment: .center)
+            return [(idCell, widths[0]), (titleCell, widths[1]), (nameCell, widths[2]), (callCell, widths[3])]
         }
     }
 
@@ -720,17 +740,100 @@ class CallSheetExporter {
                 colorFill.setFill()
                 NSBezierPath(rect: blockRect).fill()
             }
-            var innerX = cx
-            for cell in blockCellSets[blockIndex] {
-                let h = ceil(cell.text.boundingRect(with: CGSize(width: max(cell.width - 4, 1), height: .greatestFiniteMagnitude),
-                                                     options: textLayoutOptions).height)
-                cell.text.draw(with: CGRect(x: innerX + 2, y: top - rowHeight + (rowHeight - h) / 2, width: cell.width - 4, height: h),
-                                options: textLayoutOptions)
-                innerX += cell.width
-            }
+            drawCellRow(blockCellSets[blockIndex], x: cx, y: top, height: rowHeight)
             drawRowRules(widths: blockWidths, rect: blockRect)
             cx += blockTotalWidth
         }
+        cursor.y -= rowHeight
+    }
+
+    // MARK: - Page 2, Block 9: Crew table — single-column layout (contact info shown)
+
+    private struct CrewContactColumns {
+        // TITLE | NAME | PHONE | EMAIL | CALL, one full-width column — sized generously so
+        // phone/email don't need to wrap under normal circumstances (not measured from the
+        // reference doc, which has no contact-info variant of this table; Email gets the
+        // most room since addresses are typically the longest field).
+        static let widths: [CGFloat] = {
+            let pct: [CGFloat] = [0.14, 0.18, 0.15, 0.38, 0.15]
+            return pct.map { $0 * usableWidth }
+        }()
+        static let titles = ["TITLE", "NAME", "PHONE", "EMAIL", "CALL"]
+    }
+
+    /// Single full-width column — used when "Print crew contact info" is ON. No side-by-side
+    /// blocks at all: departments stack vertically, each with its own header row followed by
+    /// its members, since a 3-sub-column-wide block has nowhere near enough room for a phone
+    /// number AND an email address per person. No "#" headcount column here (not part of the
+    /// 5 fields this layout is scoped to: Title/Name/Phone/Email/Call).
+    private static func drawCrewTableSingleColumn(cursor: PageCursor, productionInfo: ProductionInfo) {
+        let widths = CrewContactColumns.widths
+        let titles = CrewContactColumns.titles
+
+        drawTableHeaderRow(cursor: cursor, widths: widths, titles: titles)
+
+        let grouped = Dictionary(grouping: productionInfo.crew) { $0.department.kind }
+        let departments: [(kind: DepartmentKind, members: [CrewMember])] = grouped
+            .map { kind, members in
+                (kind: kind, members: members.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending })
+            }
+            .filter { !$0.members.isEmpty }
+            .sorted { $0.kind.sortIndex < $1.kind.sortIndex }
+
+        // Defensive: generatePDF only calls this when productionInfo.crew is non-empty.
+        guard !departments.isEmpty else { return }
+
+        for (kind, members) in departments {
+            drawCrewContactDepartmentHeader(cursor: cursor, kind: kind, widths: widths, titles: titles)
+            for member in members {
+                drawCrewContactRow(cursor: cursor, member: member, widths: widths, titles: titles)
+            }
+        }
+
+        drawCrewMealCountRow(cursor: cursor, totalWidth: widths.reduce(0, +))
+    }
+
+    private static func drawCrewContactDepartmentHeader(
+        cursor: PageCursor, kind: DepartmentKind, widths: [CGFloat], titles: [String]
+    ) {
+        let rowHeight: CGFloat = 14
+        let didBreak = cursor.ensureSpace(rowHeight)
+        if didBreak { drawTableHeaderRow(cursor: cursor, widths: widths, titles: titles) }
+
+        let top = cursor.y
+        let totalWidth = widths.reduce(0, +)
+        let rect = CGRect(x: margin, y: top - rowHeight, width: totalWidth, height: rowHeight)
+        colorFill.setFill()
+        NSBezierPath(rect: rect).fill()
+        drawCentered(kind.displayName.uppercased(), font: NSFont.boldSystemFont(ofSize: 7), color: colorDark,
+                     in: rect, leftAlign: true)
+        strokeRect(rect, color: colorRuleLight, width: 0.4)
+        cursor.y -= rowHeight
+    }
+
+    private static func drawCrewContactRow(
+        cursor: PageCursor, member: CrewMember, widths: [CGFloat], titles: [String]
+    ) {
+        func aligned(_ text: String, font: NSFont, color: NSColor) -> NSAttributedString {
+            let para = NSMutableParagraphStyle(); para.alignment = .left
+            return NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: color, .paragraphStyle: para])
+        }
+        let cells: [(text: NSAttributedString, width: CGFloat)] = [
+            (aligned(member.role.isEmpty ? "—" : member.role.uppercased(), font: fontBody, color: colorDark), widths[0]),
+            (aligned(member.name.uppercased(), font: fontBody, color: colorDark), widths[1]),
+            (aligned(member.primaryPhone ?? "—", font: fontBody, color: colorDark), widths[2]),
+            (aligned(member.primaryEmail ?? "—", font: fontBody, color: colorDark), widths[3]),
+            (aligned("—", font: fontBody, color: colorDark), widths[4])
+        ]
+        let rowHeight = max(measureCellRow(cells), 9) + 4
+
+        let didBreak = cursor.ensureSpace(rowHeight)
+        if didBreak { drawTableHeaderRow(cursor: cursor, widths: widths, titles: titles) }
+
+        let top = cursor.y
+        let rect = CGRect(x: margin, y: top - rowHeight, width: widths.reduce(0, +), height: rowHeight)
+        drawCellRow(cells, x: margin, y: top, height: rowHeight)
+        drawRowRules(widths: widths, rect: rect)
         cursor.y -= rowHeight
     }
 
@@ -741,6 +844,23 @@ class CallSheetExporter {
             ceil(cell.text.boundingRect(with: CGSize(width: max(cell.width - 4, 1), height: .greatestFiniteMagnitude),
                                          options: textLayoutOptions).height * 1.15)
         }.max() ?? 0
+    }
+
+    /// Draws a row of independently-positioned cells, each measured+drawn with the same
+    /// 1.15x buffer used everywhere else in this file — shared by the crew grid and the
+    /// single-column contact rows so the "measure and draw must agree" fix (see
+    /// drawCrewGridRowBand's history: a crew member's name/contact line was losing its last
+    /// line to truncatesLastVisibleLine when this used the raw, unbuffered height) only has
+    /// to live in one place.
+    private static func drawCellRow(_ cells: [(text: NSAttributedString, width: CGFloat)], x: CGFloat, y: CGFloat, height: CGFloat) {
+        var cx = x
+        for cell in cells {
+            let h = ceil(cell.text.boundingRect(with: CGSize(width: max(cell.width - 4, 1), height: .greatestFiniteMagnitude),
+                                                 options: textLayoutOptions).height * 1.15)
+            cell.text.draw(with: CGRect(x: cx + 2, y: y - height + (height - h) / 2, width: cell.width - 4, height: h),
+                            options: textLayoutOptions)
+            cx += cell.width
+        }
     }
 
     /// Meal counts (CALLSHEET_SPEC.md §2.8: "Crew Breakfast x60, BG Lunch x0") are computed

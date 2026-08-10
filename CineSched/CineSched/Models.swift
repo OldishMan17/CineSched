@@ -625,6 +625,11 @@ struct ProductionInfo: Codable, Equatable {
     // Set once per production — safety/conduct boilerplate printed on every call sheet's
     // rules block, replacing the fixed placeholder text CallSheetExporter used to hardcode.
     var boilerplateText: String
+    // CALLSHEET_SPEC.md §2.8: union call sheets deliberately omit crew phone/email —
+    // contacts are distributed as a separate document — while indie/student productions
+    // print them inline since there's no separate crew list. Defaults to on: most CineSched
+    // users are indie/student productions, where inline contacts are the norm.
+    var printCrewContactInfo: Bool
 
     init(
         companyName:   String = "",
@@ -633,7 +638,8 @@ struct ProductionInfo: Codable, Equatable {
         contactNumber: String = "",
         crew:          [CrewMember] = [],
         castList:      [CastMember] = [],
-        boilerplateText: String = ""
+        boilerplateText: String = "",
+        printCrewContactInfo: Bool = true
     ) {
         self.companyName     = companyName
         self.director        = director
@@ -642,6 +648,7 @@ struct ProductionInfo: Codable, Equatable {
         self.crew            = crew
         self.castList        = castList
         self.boilerplateText = boilerplateText
+        self.printCrewContactInfo = printCrewContactInfo
     }
 
     // Raw string values are unchanged from before ("directorName", "producerName") even
@@ -652,7 +659,7 @@ struct ProductionInfo: Codable, Equatable {
         case companyName
         case directorName
         case producerName
-        case contactNumber, crew, castList, boilerplateText
+        case contactNumber, crew, castList, boilerplateText, printCrewContactInfo
     }
 
     init(from decoder: Decoder) throws {
@@ -665,6 +672,9 @@ struct ProductionInfo: Codable, Equatable {
         castList      = try c.decode([CastMember].self, forKey: .castList)
         // Absent on any production saved before this field existed.
         boilerplateText = try c.decodeIfPresent(String.self, forKey: .boilerplateText) ?? ""
+        // Absent on any production saved before this field existed — defaults to on, same
+        // as a brand new production, per this field's own default rationale above.
+        printCrewContactInfo = try c.decodeIfPresent(Bool.self, forKey: .printCrewContactInfo) ?? true
     }
 
     func encode(to encoder: Encoder) throws {
@@ -676,6 +686,7 @@ struct ProductionInfo: Codable, Equatable {
         try c.encode(crew,          forKey: .crew)
         try c.encode(castList,      forKey: .castList)
         try c.encode(boilerplateText, forKey: .boilerplateText)
+        try c.encode(printCrewContactInfo, forKey: .printCrewContactInfo)
     }
 
     /// A key contact might be in any of three states depending on when the file was saved:
