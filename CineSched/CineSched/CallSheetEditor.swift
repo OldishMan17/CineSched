@@ -28,8 +28,11 @@ struct CallSheetEditor: View {
     @State private var castIsEdited: Bool       = false
     @State private var notes:        String     = ""
 
-    // Crew state — parallel bool array tracks checked state
-    @State private var crewChecked:  [Bool]   = []   // indexed to allRosterEntries
+    // Crew state — parallel bool arrays track checked/counted state, both indexed to
+    // allRosterEntries
+    @State private var crewChecked:  [Bool]   = []
+    @State private var crewCounted:  [Bool]   = []   // headcount — only editable/shown per-person when showHeadcount is on
+    @State private var showHeadcount: Bool    = false
     @State private var crewOneOffs:  [String] = []   // free-typed additions not in roster
     @State private var newCrewEntry: String   = ""
 
@@ -317,7 +320,13 @@ struct CallSheetEditor: View {
                     Divider()
 
                     // Crew
-                    sectionHeader("Crew", icon: "person.3")
+                    HStack {
+                        sectionHeader("Crew", icon: "person.3")
+                        Spacer()
+                        Toggle("Show headcount column", isOn: $showHeadcount)
+                            .toggleStyle(.switch)
+                            .font(.caption)
+                    }
 
                     if allRosterEntries.isEmpty && crewOneOffs.isEmpty {
                         Text("No crew in Production Setup yet. Add crew members there, or type a name below.")
@@ -424,6 +433,21 @@ struct CallSheetEditor: View {
                 }
             }
             Spacer()
+            // Headcount only matters (and is only shown) for crew actually selected for this
+            // day, and only when the day's master toggle is on — never shown disabled.
+            if showHeadcount, index < crewChecked.count, crewChecked[index], index < crewCounted.count {
+                Button {
+                    crewCounted[index].toggle()
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: crewCounted[index] ? "checkmark.square.fill" : "square")
+                        Text("Headcount")
+                    }
+                    .font(.caption2)
+                    .foregroundColor(crewCounted[index] ? .blue : .secondary)
+                }
+                .buttonStyle(.plain)
+            }
         }
         .padding(.vertical, 3)
         .contentShape(Rectangle())
@@ -490,6 +514,23 @@ struct CallSheetEditor: View {
             crewChecked = roster.map { $0.isDailyDefault }
             crewOneOffs = []
         }
+
+        // Headcount. previouslySelectedIDs is who this day's crewIDOverride already had
+        // *before* this editing session opened — for them, an explicit saved
+        // crewCountedIDs decision (if any) is authoritative even if it happens to say
+        // "not counted" for a daily-default person (a deliberate override, e.g. sick that
+        // day). For anyone NOT already selected — a brand new day, or a crew member being
+        // checked for the first time just now in this session — there's no prior decision
+        // to honor, so the daily-default applies live, exactly like a freshly created day.
+        showHeadcount = shootDay.callSheet.showHeadcount
+        let previouslySelectedIDs = Set(shootDay.callSheet.crewIDOverride ?? [])
+        let explicitCounted = shootDay.callSheet.crewCountedIDs
+        crewCounted = roster.map { member in
+            if previouslySelectedIDs.contains(member.id), let explicit = explicitCounted {
+                return explicit.contains(member.id)
+            }
+            return member.isDailyDefault
+        }
     }
 
     private func saveToDay() {
@@ -514,5 +555,9 @@ struct CallSheetEditor: View {
         shootDay.callSheet.crewIDOverride = selectedIDs
         shootDay.callSheet.crewOneOffs    = crewOneOffs
         shootDay.callSheet.crewOverride   = nil   // fully migrated off the legacy text-based field
+
+        shootDay.callSheet.showHeadcount = showHeadcount
+        let countedIDs = zip(roster, crewCounted).compactMap { member, isCounted in isCounted ? member.id : nil }
+        shootDay.callSheet.crewCountedIDs = countedIDs
     }
 }

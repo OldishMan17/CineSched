@@ -104,9 +104,9 @@ class CallSheetExporter {
             // without it, the existing side-by-side block grid stays, just 2 blocks instead
             // of 3 so long department names/titles ("ART DEPARTMENT") have room to fit.
             if productionInfo.printCrewContactInfo {
-                drawCrewTableSingleColumn(cursor: cursor, productionInfo: productionInfo)
+                drawCrewTableSingleColumn(cursor: cursor, shootDay: shootDay, productionInfo: productionInfo)
             } else {
-                drawCrewTableGrid(cursor: cursor, productionInfo: productionInfo)
+                drawCrewTableGrid(cursor: cursor, shootDay: shootDay, productionInfo: productionInfo)
             }
         }
         drawDepartmentNotes(cursor: cursor)
@@ -580,18 +580,21 @@ class CallSheetExporter {
     // MARK: - Page 2, Block 9: Crew table — the three-block grid
 
     private struct CrewGridColumns {
-        static let titles = ["#", "TITLE", "NAME", "CALL"]
-
         /// # / TITLE / NAME / CALL widths for ONE block, sized so `blockCount` blocks span
-        /// the full page — relative proportions between the four sub-columns are preserved
-        /// from the original measurement (REFERENCE_CALLSHEET.docx: 419/1152/1221/698 dxa of
-        /// 10469, a block that was 1 of 3), only each block's total share of the page
-        /// changes. Parameterized per CALLSHEET_LAYOUT.md §4.3's own note that the balancing
-        /// approach — and so the block count — shouldn't be hardcoded (REF-K uses 2 blocks).
-        static func widths(blockCount: Int) -> [CGFloat] {
-            let basePct: [CGFloat] = [0.0400, 0.1100, 0.1167, 0.0667]   // sums to ~1/3 (one of 3 blocks)
+        /// the full page. When showHeadcount is false the "#" column is dropped entirely and
+        /// its share folded back into the remaining three (same total block width either
+        /// way, matching how other optional blocks collapse rather than showing empty state)
+        /// — relative proportions otherwise preserved from the original measurement
+        /// (REFERENCE_CALLSHEET.docx: 419/1152/1221/698 dxa of 10469, a block that was 1 of
+        /// 3).
+        static func widths(blockCount: Int, showHeadcount: Bool) -> [CGFloat] {
+            let fullPct: [CGFloat] = [0.0400, 0.1100, 0.1167, 0.0667]   // #, TITLE, NAME, CALL
+            let basePct = showHeadcount ? fullPct : Array(fullPct.dropFirst())
             let scale = (1.0 / CGFloat(blockCount)) / basePct.reduce(0, +)
             return basePct.map { $0 * scale * usableWidth }
+        }
+        static func titles(showHeadcount: Bool) -> [String] {
+            showHeadcount ? ["#", "TITLE", "NAME", "CALL"] : ["TITLE", "NAME", "CALL"]
         }
     }
 
@@ -604,19 +607,18 @@ class CallSheetExporter {
     /// flow down each block, then to the next block — not left to right — per
     /// CALLSHEET_LAYOUT.md §4.3. No call-time-per-crew-member field exists in the data model
     /// yet, so the CALL column is "—" throughout, same placeholder convention page 1 already
-    /// uses. The headcount flag (0/1, "not a quantity") also has no source field; every row
-    /// here shows "1" as the reasonable default (everyone listed is presumed meal-counted
-    /// unless told otherwise) — but that default is never summed into a real meal-count
-    /// total below, since presenting a synthetic sum as a real headcount would be worse than
-    /// not showing one at all.
-    private static func drawCrewTableGrid(cursor: PageCursor, productionInfo: ProductionInfo) {
+    /// uses. The "#" headcount column only appears when the day's "Show headcount column"
+    /// toggle is on (CallSheetEditor); its value is each person's real per-day counted
+    /// status, not a hardcoded default.
+    private static func drawCrewTableGrid(cursor: PageCursor, shootDay: ShootDay, productionInfo: ProductionInfo) {
         // 2 blocks (not 3): with no contact info competing for room, this is still a fairly
         // dense grid, and 2 blocks at ~50% each gives long department names ("ART
         // DEPARTMENT") and long crew names room to fit without wrapping under normal
         // circumstances, where 3 blocks at ~33% forced them to.
         let blockCount = 2
-        let blockWidths = CrewGridColumns.widths(blockCount: blockCount)
-        let blockTitles = CrewGridColumns.titles
+        let showHeadcount = shootDay.callSheet.showHeadcount
+        let blockWidths = CrewGridColumns.widths(blockCount: blockCount, showHeadcount: showHeadcount)
+        let blockTitles = CrewGridColumns.titles(showHeadcount: showHeadcount)
         let allWidths = Array(repeating: blockWidths, count: blockCount).flatMap { $0 }
         let allTitles = Array(repeating: blockTitles, count: blockCount).flatMap { $0 }
 
@@ -647,14 +649,24 @@ class CallSheetExporter {
             [CrewGridRow.header(kind)] + members.map { CrewGridRow.member($0) }
         }
         let columns = balanceIntoColumns(departmentBlocks, columnCount: blockCount)
+        let counted = countedLookup(shootDay: shootDay, productionInfo: productionInfo)
 
         let totalRows = columns.map { $0.count }.max() ?? 0
         for rowIndex in 0..<totalRows {
             drawCrewGridRowBand(cursor: cursor, columns: columns, rowIndex: rowIndex,
-                                 blockWidths: blockWidths, blockTitles: blockTitles)
+                                 blockWidths: blockWidths, blockTitles: blockTitles,
+                                 showHeadcount: showHeadcount, counted: counted)
         }
 
-        drawCrewMealCountRow(cursor: cursor, totalWidth: allWidths.reduce(0, +))
+        drawCrewMealCountRow(cursor: cursor, totalWidth: allWidths.reduce(0, +), shootDay: shootDay, productionInfo: productionInfo)
+    }
+
+    /// One (memberID → counted) lookup for the whole table, computed once rather than
+    /// re-resolving CallSheetData.isCrewMemberCounted's explicit-vs-default logic per cell.
+    private static func countedLookup(shootDay: ShootDay, productionInfo: ProductionInfo) -> [UUID: Bool] {
+        Dictionary(uniqueKeysWithValues: productionInfo.crew.map {
+            ($0.id, shootDay.callSheet.isCrewMemberCounted($0.id, in: productionInfo.crew))
+        })
     }
 
     /// Greedy longest-processing-time-first bin packing: largest department blocks placed
@@ -671,13 +683,15 @@ class CallSheetExporter {
         return columns
     }
 
-    /// One block's drawable cells for a row-band slot: either a member's 4 columns, a
+    /// One block's drawable cells for a row-band slot: either a member's columns, a
     /// department header (name merged across TITLE+NAME), or blank cells when this column
     /// has already run out of content at this row index. Widths carry through so the whole
     /// band's height can be measured before anything is drawn. This grid never shows contact
     /// info — that's the single-column layout's job (drawCrewTableSingleColumn) — so it's
-    /// always just #/TITLE/NAME/CALL.
-    private static func crewBlockCells(row: CrewGridRow?, widths: [CGFloat]) -> [(text: NSAttributedString, width: CGFloat)] {
+    /// #/TITLE/NAME/CALL when showHeadcount is on, TITLE/NAME/CALL when it's off.
+    private static func crewBlockCells(
+        row: CrewGridRow?, widths: [CGFloat], showHeadcount: Bool, counted: [UUID: Bool]
+    ) -> [(text: NSAttributedString, width: CGFloat)] {
         func aligned(_ text: String, font: NSFont, color: NSColor, alignment: NSTextAlignment) -> NSAttributedString {
             let para = NSMutableParagraphStyle(); para.alignment = alignment
             return NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: color, .paragraphStyle: para])
@@ -687,21 +701,25 @@ class CallSheetExporter {
         }
         switch row {
         case .header(let kind):
+            let deptName = aligned(kind.displayName.uppercased(), font: NSFont.boldSystemFont(ofSize: 6.5), color: colorDark, alignment: .left)
             // "#" stays blank (a department header isn't itself a headcount-flagged person);
             // CALL-column position would hold an optional walkie channel in the reference —
             // no such field exists in the model, so it's left blank rather than fabricated.
-            return [
-                (NSAttributedString(string: ""), widths[0]),
-                (aligned(kind.displayName.uppercased(), font: NSFont.boldSystemFont(ofSize: 6.5), color: colorDark, alignment: .left),
-                 widths[1] + widths[2]),
-                (NSAttributedString(string: ""), widths[3])
-            ]
+            if showHeadcount {
+                return [(NSAttributedString(string: ""), widths[0]), (deptName, widths[1] + widths[2]), (NSAttributedString(string: ""), widths[3])]
+            } else {
+                return [(deptName, widths[0] + widths[1]), (NSAttributedString(string: ""), widths[2])]
+            }
         case .member(let member):
-            let idCell    = aligned("1", font: fontBody, color: colorDark, alignment: .center)
             let titleCell = aligned(member.role.isEmpty ? "—" : member.role.uppercased(), font: fontBody, color: colorDark, alignment: .left)
             let nameCell  = aligned(member.name.uppercased(), font: fontBody, color: colorDark, alignment: .left)
             let callCell  = aligned("—", font: fontBody, color: colorDark, alignment: .center)
-            return [(idCell, widths[0]), (titleCell, widths[1]), (nameCell, widths[2]), (callCell, widths[3])]
+            if showHeadcount {
+                let idCell = aligned((counted[member.id] ?? false) ? "1" : "0", font: fontBody, color: colorDark, alignment: .center)
+                return [(idCell, widths[0]), (titleCell, widths[1]), (nameCell, widths[2]), (callCell, widths[3])]
+            } else {
+                return [(titleCell, widths[0]), (nameCell, widths[1]), (callCell, widths[2])]
+            }
         }
     }
 
@@ -716,10 +734,12 @@ class CallSheetExporter {
     /// instead of losing the rest of it to drawCentered's single-line truncation, which is
     /// exactly what happened here before this fix ("Mother Fucker" → "Mother Fu…").
     private static func drawCrewGridRowBand(
-        cursor: PageCursor, columns: [[CrewGridRow]], rowIndex: Int, blockWidths: [CGFloat], blockTitles: [String]
+        cursor: PageCursor, columns: [[CrewGridRow]], rowIndex: Int, blockWidths: [CGFloat], blockTitles: [String],
+        showHeadcount: Bool, counted: [UUID: Bool]
     ) {
         let blockCellSets: [[(text: NSAttributedString, width: CGFloat)]] = columns.map { column in
-            crewBlockCells(row: rowIndex < column.count ? column[rowIndex] : nil, widths: blockWidths)
+            crewBlockCells(row: rowIndex < column.count ? column[rowIndex] : nil, widths: blockWidths,
+                            showHeadcount: showHeadcount, counted: counted)
         }
         let allCells = blockCellSets.flatMap { $0 }
         let rowHeight = max(measureCellRow(allCells), 9) + 4
@@ -750,25 +770,30 @@ class CallSheetExporter {
     // MARK: - Page 2, Block 9: Crew table — single-column layout (contact info shown)
 
     private struct CrewContactColumns {
-        // TITLE | NAME | PHONE | EMAIL | CALL, one full-width column — sized generously so
-        // phone/email don't need to wrap under normal circumstances (not measured from the
-        // reference doc, which has no contact-info variant of this table; Email gets the
-        // most room since addresses are typically the longest field).
-        static let widths: [CGFloat] = {
-            let pct: [CGFloat] = [0.14, 0.18, 0.15, 0.38, 0.15]
+        // (#) | TITLE | NAME | PHONE | EMAIL | CALL, one full-width column — sized generously
+        // so phone/email don't need to wrap under normal circumstances (not measured from
+        // the reference doc, which has no contact-info variant of this table; Email gets the
+        // most room since addresses are typically the longest field). "#" only appears when
+        // the day's headcount toggle is on, same as the grid layout.
+        static func widths(showHeadcount: Bool) -> [CGFloat] {
+            let pct: [CGFloat] = showHeadcount
+                ? [0.06, 0.13, 0.17, 0.14, 0.36, 0.14]
+                : [0.14, 0.18, 0.15, 0.38, 0.15]
             return pct.map { $0 * usableWidth }
-        }()
-        static let titles = ["TITLE", "NAME", "PHONE", "EMAIL", "CALL"]
+        }
+        static func titles(showHeadcount: Bool) -> [String] {
+            showHeadcount ? ["#", "TITLE", "NAME", "PHONE", "EMAIL", "CALL"] : ["TITLE", "NAME", "PHONE", "EMAIL", "CALL"]
+        }
     }
 
     /// Single full-width column — used when "Print crew contact info" is ON. No side-by-side
     /// blocks at all: departments stack vertically, each with its own header row followed by
     /// its members, since a 3-sub-column-wide block has nowhere near enough room for a phone
-    /// number AND an email address per person. No "#" headcount column here (not part of the
-    /// 5 fields this layout is scoped to: Title/Name/Phone/Email/Call).
-    private static func drawCrewTableSingleColumn(cursor: PageCursor, productionInfo: ProductionInfo) {
-        let widths = CrewContactColumns.widths
-        let titles = CrewContactColumns.titles
+    /// number AND an email address per person.
+    private static func drawCrewTableSingleColumn(cursor: PageCursor, shootDay: ShootDay, productionInfo: ProductionInfo) {
+        let showHeadcount = shootDay.callSheet.showHeadcount
+        let widths = CrewContactColumns.widths(showHeadcount: showHeadcount)
+        let titles = CrewContactColumns.titles(showHeadcount: showHeadcount)
 
         drawTableHeaderRow(cursor: cursor, widths: widths, titles: titles)
 
@@ -783,14 +808,16 @@ class CallSheetExporter {
         // Defensive: generatePDF only calls this when productionInfo.crew is non-empty.
         guard !departments.isEmpty else { return }
 
+        let counted = countedLookup(shootDay: shootDay, productionInfo: productionInfo)
         for (kind, members) in departments {
             drawCrewContactDepartmentHeader(cursor: cursor, kind: kind, widths: widths, titles: titles)
             for member in members {
-                drawCrewContactRow(cursor: cursor, member: member, widths: widths, titles: titles)
+                drawCrewContactRow(cursor: cursor, member: member, widths: widths, titles: titles,
+                                    showHeadcount: showHeadcount, counted: counted)
             }
         }
 
-        drawCrewMealCountRow(cursor: cursor, totalWidth: widths.reduce(0, +))
+        drawCrewMealCountRow(cursor: cursor, totalWidth: widths.reduce(0, +), shootDay: shootDay, productionInfo: productionInfo)
     }
 
     private static func drawCrewContactDepartmentHeader(
@@ -812,27 +839,32 @@ class CallSheetExporter {
     }
 
     private static func drawCrewContactRow(
-        cursor: PageCursor, member: CrewMember, widths: [CGFloat], titles: [String]
+        cursor: PageCursor, member: CrewMember, widths: [CGFloat], titles: [String],
+        showHeadcount: Bool, counted: [UUID: Bool]
     ) {
-        func aligned(_ text: String, font: NSFont, color: NSColor) -> NSAttributedString {
-            let para = NSMutableParagraphStyle(); para.alignment = .left
+        func aligned(_ text: String, font: NSFont, color: NSColor, alignment: NSTextAlignment = .left) -> NSAttributedString {
+            let para = NSMutableParagraphStyle(); para.alignment = alignment
             return NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: color, .paragraphStyle: para])
         }
-        let cells: [(text: NSAttributedString, width: CGFloat)] = [
-            (aligned(member.role.isEmpty ? "—" : member.role.uppercased(), font: fontBody, color: colorDark), widths[0]),
-            (aligned(member.name.uppercased(), font: fontBody, color: colorDark), widths[1]),
-            (aligned(member.primaryPhone ?? "—", font: fontBody, color: colorDark), widths[2]),
-            (aligned(member.primaryEmail ?? "—", font: fontBody, color: colorDark), widths[3]),
-            (aligned("—", font: fontBody, color: colorDark), widths[4])
-        ]
-        let rowHeight = max(measureCellRow(cells), 9) + 4
+        var cells: [NSAttributedString] = []
+        if showHeadcount {
+            cells.append(aligned((counted[member.id] ?? false) ? "1" : "0", font: fontBody, color: colorDark, alignment: .center))
+        }
+        cells.append(aligned(member.role.isEmpty ? "—" : member.role.uppercased(), font: fontBody, color: colorDark))
+        cells.append(aligned(member.name.uppercased(), font: fontBody, color: colorDark))
+        cells.append(aligned(member.primaryPhone ?? "—", font: fontBody, color: colorDark))
+        cells.append(aligned(member.primaryEmail ?? "—", font: fontBody, color: colorDark))
+        cells.append(aligned("—", font: fontBody, color: colorDark, alignment: .center))
+
+        let cellPairs: [(text: NSAttributedString, width: CGFloat)] = zip(cells, widths).map { ($0, $1) }
+        let rowHeight = max(measureCellRow(cellPairs), 9) + 4
 
         let didBreak = cursor.ensureSpace(rowHeight)
         if didBreak { drawTableHeaderRow(cursor: cursor, widths: widths, titles: titles) }
 
         let top = cursor.y
         let rect = CGRect(x: margin, y: top - rowHeight, width: widths.reduce(0, +), height: rowHeight)
-        drawCellRow(cells, x: margin, y: top, height: rowHeight)
+        drawCellRow(cellPairs, x: margin, y: top, height: rowHeight)
         drawRowRules(widths: widths, rect: rect)
         cursor.y -= rowHeight
     }
@@ -863,16 +895,27 @@ class CallSheetExporter {
         }
     }
 
-    /// Meal counts (CALLSHEET_SPEC.md §2.8: "Crew Breakfast x60, BG Lunch x0") are computed
-    /// from the headcount flag's real 0/1 values in a real call sheet — since that flag has
-    /// no data source here, this placeholders the counts rather than summing the "1" default
-    /// shown per-row above and presenting a made-up total as if it were real.
-    private static func drawCrewMealCountRow(cursor: PageCursor, totalWidth: CGFloat) {
+    /// Meal counts (CALLSHEET_SPEC.md §2.8: "Crew Breakfast x60, BG Lunch x0"). Crew
+    /// breakfast/lunch both sum real per-day counted crew once the day's headcount toggle is
+    /// on — there's only one counted flag per person, not a separate one per meal, so both
+    /// numbers are the same sum. BG (background) headcount has no tracking anywhere in the
+    /// model, so it stays "—" rather than a guess, same as the whole line stays "—" when
+    /// headcount tracking is off for this day entirely.
+    private static func drawCrewMealCountRow(cursor: PageCursor, totalWidth: CGFloat, shootDay: ShootDay, productionInfo: ProductionInfo) {
         let rowHeight: CGFloat = 14
         cursor.ensureSpace(rowHeight)
         let rect = CGRect(x: margin, y: cursor.y - rowHeight, width: totalWidth, height: rowHeight)
-        drawCentered("CREW BREAKFAST —   •   CREW LUNCH —   •   BG LUNCH —",
-                     font: NSFont.boldSystemFont(ofSize: 7), color: colorDark, in: rect)
+
+        let text: String
+        if shootDay.callSheet.showHeadcount {
+            let countedTotal = productionInfo.crew.filter {
+                shootDay.callSheet.isCrewMemberCounted($0.id, in: productionInfo.crew)
+            }.count
+            text = "CREW BREAKFAST x\(countedTotal)   •   CREW LUNCH x\(countedTotal)   •   BG LUNCH —"
+        } else {
+            text = "CREW BREAKFAST —   •   CREW LUNCH —   •   BG LUNCH —"
+        }
+        drawCentered(text, font: NSFont.boldSystemFont(ofSize: 7), color: colorDark, in: rect)
         strokeRect(rect, color: colorRule, width: 0.6)
         cursor.y -= rowHeight
     }

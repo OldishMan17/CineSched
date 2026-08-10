@@ -201,6 +201,19 @@ struct CallSheetData: Codable {
     var crewPark:         String
     var hospitals:        [Hospital]
 
+    // Headcount tracking — see CALLSHEET_LAYOUT.md §4.3: the crew grid's "#" column is a
+    // 0/1 meal-count flag, not a quantity. showHeadcount is the per-day master switch
+    // (defaults off); crewCountedIDs is which roster crew count toward it. nil (not merely
+    // empty) means "no explicit decision has ever been saved for this day" — CallSheetData
+    // itself has no roster to compute a default from, so resolving nil to an actual
+    // true/false per person happens where the roster is available (CallSheetEditor,
+    // CallSheetExporter), always via the same rule: a crew member marked "daily" defaults to
+    // counted, everyone else defaults to not-counted. An old saved file (this field absent)
+    // and a freshly created day both simply have crewCountedIDs == nil, so they resolve
+    // identically without any separate migration step.
+    var showHeadcount:  Bool
+    var crewCountedIDs: [UUID]?
+
     init(
         generalCallTime: String     = "",
         locations:       [Location] = [],
@@ -215,7 +228,9 @@ struct CallSheetData: Codable {
         dinnerTime:       String   = "",
         basecamp:         String   = "",
         crewPark:         String   = "",
-        hospitals:        [Hospital] = []
+        hospitals:        [Hospital] = [],
+        showHeadcount:    Bool = false,
+        crewCountedIDs:   [UUID]? = nil
     ) {
         self.generalCallTime  = generalCallTime
         self.locations        = locations
@@ -231,11 +246,14 @@ struct CallSheetData: Codable {
         self.basecamp         = basecamp
         self.crewPark         = crewPark
         self.hospitals        = hospitals
+        self.showHeadcount    = showHeadcount
+        self.crewCountedIDs   = crewCountedIDs
     }
 
     private enum CodingKeys: String, CodingKey {
         case generalCallTime, locations, castOverride, crewOverride, crewIDOverride, crewOneOffs, notes
         case shootingCallTime, breakfastTime, lunchTime, dinnerTime, basecamp, crewPark, hospitals
+        case showHeadcount, crewCountedIDs
     }
 
     init(from decoder: Decoder) throws {
@@ -255,6 +273,18 @@ struct CallSheetData: Codable {
         basecamp         = try c.decodeIfPresent(String.self, forKey: .basecamp) ?? ""
         crewPark         = try c.decodeIfPresent(String.self, forKey: .crewPark) ?? ""
         hospitals        = try c.decodeIfPresent([Hospital].self, forKey: .hospitals) ?? []
+        showHeadcount    = try c.decodeIfPresent(Bool.self, forKey: .showHeadcount) ?? false
+        crewCountedIDs   = try c.decodeIfPresent([UUID].self, forKey: .crewCountedIDs)
+    }
+
+    /// Whether `memberID` counts toward this day's headcount: the day's explicit saved
+    /// decision if there is one, else the default a brand-new (or pre-this-feature) day
+    /// applies live — daily-default crew count, everyone else doesn't.
+    func isCrewMemberCounted(_ memberID: UUID, in roster: [CrewMember]) -> Bool {
+        if let explicit = crewCountedIDs {
+            return explicit.contains(memberID)
+        }
+        return roster.first(where: { $0.id == memberID })?.isDailyDefault ?? false
     }
 
     /// Resolves the raw character names (auto-pulled from scenes, or the manually-edited
