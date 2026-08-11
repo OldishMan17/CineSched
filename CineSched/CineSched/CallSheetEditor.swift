@@ -11,6 +11,11 @@ struct CallSheetEditor: View {
     /// the full shootDays array, which this view doesn't otherwise have); nil when there's no
     /// usable prior day, in which case that action is hidden rather than shown disabled.
     var previousDayCallSheet: CallSheetData? = nil
+    /// The full production schedule — needed to auto-derive each cast member's S/W/F status
+    /// (their earliest/latest scheduled day across every day, not just this one). A snapshot
+    /// as of when this sheet opened, same as previousDayCallSheet; doesn't live-update if
+    /// another day changes while this sheet is open.
+    var allShootDays: [ShootDay] = []
     @Binding var isPresented: Bool
     let onSave: () -> Void
     let onExportPDF: (ShootDay) -> Void
@@ -20,6 +25,7 @@ struct CallSheetEditor: View {
     @State private var breakfastTime: String = ""
     @State private var lunchTime:     String = ""
     @State private var dinnerTime:    String = ""
+    @State private var showCrewMealCount: Bool = true
     @State private var basecamp:      String = ""
     @State private var crewPark:      String = ""
     @State private var hospitals:     [Hospital] = []
@@ -35,6 +41,18 @@ struct CallSheetEditor: View {
     @State private var castCharacters: [String] = []   // raw character names, NOT "Actor — Character" text
     @State private var castIsEdited: Bool       = false
     @State private var notes:        String     = ""
+
+    // Cast table's per-character columns — all keyed by normalized (trimmed, lowercased)
+    // character name, dictionary-backed rather than parallel arrays so add/remove on
+    // castCharacters never has to keep six other arrays index-aligned with it.
+    @State private var castStatusOverride: [String: String] = [:]   // blank/missing = use auto-derived
+    @State private var castPickup: [String: String] = [:]
+    @State private var castHMW:    [String: String] = [:]
+    @State private var castBlock:  [String: String] = [:]
+    @State private var castSet:    [String: String] = [:]
+    @State private var castNotesByCharacter: [String: String] = [:]
+
+    private static let castStatusOptions = ["S", "SW", "W", "WF", "F", "SWF", "H", "R", "T", "D", "SWD", "WD"]
 
     // Crew state — parallel arrays track checked/counted/call-time state, all indexed to
     // allRosterEntries
@@ -75,6 +93,40 @@ struct CallSheetEditor: View {
             return match.displayString
         }
         return character
+    }
+
+    private func normalizedCastKey(_ character: String) -> String {
+        character.trimmingCharacters(in: .whitespaces).lowercased()
+    }
+
+    /// allShootDays with this day's entry swapped for the in-progress castCharacters edit,
+    /// so adding/removing a cast member updates everyone's auto-derived S/W/F live, without
+    /// requiring a save first.
+    private var shootDaysForAutoStatus: [ShootDay] {
+        allShootDays.map { day in
+            guard day.id == shootDay.id else { return day }
+            var updated = day
+            updated.callSheet.castOverride = castCharacters
+            return updated
+        }
+    }
+
+    private func autoCastStatus(for character: String) -> String {
+        CallSheetData.autoCastStatus(forCharacter: character, on: shootDay.date, allShootDays: shootDaysForAutoStatus)
+    }
+
+    private func dictBinding(_ dict: Binding<[String: String]>, key: String) -> Binding<String> {
+        Binding(get: { dict.wrappedValue[key] ?? "" }, set: { dict.wrappedValue[key] = $0 })
+    }
+
+    private func castStatusBinding(key: String) -> Binding<String> {
+        Binding(
+            get: { castStatusOverride[key] ?? "" },
+            set: { newValue in
+                if newValue.isEmpty { castStatusOverride.removeValue(forKey: key) }
+                else { castStatusOverride[key] = newValue }
+            }
+        )
     }
 
     var body: some View {
@@ -123,6 +175,11 @@ struct CallSheetEditor: View {
                         LabeledTextField("Breakfast", placeholder: "e.g. 0600–0700, or COME HAVING HAD", text: $breakfastTime)
                         LabeledTextField("Lunch",     placeholder: "e.g. 1300 (½ hr)",                   text: $lunchTime)
                         LabeledTextField("Dinner",    placeholder: "optional",                           text: $dinnerTime)
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        Toggle("Show crew meal count on call sheet", isOn: $showCrewMealCount)
+                        Text("Prints \"CREW BREAKFAST x_ • CREW LUNCH x_\" using the crew table's headcount flag — the same per-person \"counted\" toggle, not a separate breakfast/lunch count.")
+                            .font(.caption).foregroundColor(.secondary)
                     }
 
                     Divider()
@@ -322,13 +379,40 @@ struct CallSheetEditor: View {
                         Text("No cast assigned to scenes on this day.").font(.caption).foregroundColor(.secondary)
                     } else {
                         ForEach(Array(castCharacters.enumerated()), id: \.offset) { index, character in
-                            HStack {
-                                Text(displayText(forCharacter: character))
-                                Spacer()
-                                Button { castCharacters.remove(at: index); castIsEdited = true } label: {
-                                    Image(systemName: "minus.circle").foregroundColor(.red)
+                            let key = normalizedCastKey(character)
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack {
+                                    Text(displayText(forCharacter: character))
+                                    Spacer()
+                                    Button { castCharacters.remove(at: index); castIsEdited = true } label: {
+                                        Image(systemName: "minus.circle").foregroundColor(.red)
+                                    }
+                                    .buttonStyle(.plain)
                                 }
-                                .buttonStyle(.plain)
+                                // S/W/F auto-derives from this character's earliest/latest
+                                // scheduled day across the whole production
+                                // (CALLSHEET_SPEC.md §3.4); picking "Auto" clears any
+                                // override and reverts to that computed value, picking
+                                // anything else pins it. The other five are plain per-day
+                                // text, same convention as the per-crew Call field —
+                                // O/C, S/D, TBD, "Per Karen", whatever the day calls for.
+                                HStack(spacing: 6) {
+                                    Picker("", selection: castStatusBinding(key: key)) {
+                                        let auto = autoCastStatus(for: character)
+                                        Text(auto.isEmpty ? "Auto" : "Auto (\(auto))").tag("")
+                                        Divider()
+                                        ForEach(Self.castStatusOptions, id: \.self) { code in
+                                            Text(code).tag(code)
+                                        }
+                                    }
+                                    .labelsHidden()
+                                    .frame(width: 110)
+                                    castMiniField("P/U",    dictBinding($castPickup, key: key))
+                                    castMiniField("H/M/W",  dictBinding($castHMW, key: key))
+                                    castMiniField("Block",  dictBinding($castBlock, key: key))
+                                    castMiniField("Set",    dictBinding($castSet, key: key))
+                                    castMiniField("Notes",  dictBinding($castNotesByCharacter, key: key), width: 120)
+                                }
                             }
                             .padding(.vertical, 4)
                             Divider()
@@ -520,6 +604,16 @@ struct CallSheetEditor: View {
         }
     }
 
+    /// A cast row's compact per-character fields (P/U, H/M/W, Block, Set, Notes) — same
+    /// placeholder-as-label, no time-picker convention as the per-crew Call field.
+    @ViewBuilder
+    private func castMiniField(_ placeholder: String, _ text: Binding<String>, width: CGFloat = 60) -> some View {
+        TextField(placeholder, text: text)
+            .textFieldStyle(.roundedBorder)
+            .font(.caption2)
+            .frame(width: width)
+    }
+
     // MARK: - Populate / save
 
     private func populateFields() {
@@ -528,6 +622,7 @@ struct CallSheetEditor: View {
         breakfastTime    = shootDay.callSheet.breakfastTime
         lunchTime        = shootDay.callSheet.lunchTime
         dinnerTime       = shootDay.callSheet.dinnerTime
+        showCrewMealCount = shootDay.callSheet.showCrewMealCount
         basecamp         = shootDay.callSheet.basecamp
         crewPark         = shootDay.callSheet.crewPark
         hospitals        = shootDay.callSheet.hospitals
@@ -549,6 +644,12 @@ struct CallSheetEditor: View {
             castCharacters = shootDay.allCast
             castIsEdited   = false
         }
+        castStatusOverride   = shootDay.callSheet.castStatusOverride ?? [:]
+        castPickup           = shootDay.callSheet.castPickup ?? [:]
+        castHMW               = shootDay.callSheet.castHMW ?? [:]
+        castBlock             = shootDay.callSheet.castBlock ?? [:]
+        castSet               = shootDay.callSheet.castSet ?? [:]
+        castNotesByCharacter = shootDay.callSheet.castNotes ?? [:]
 
         // Crew — build checked array from the new ID-based override, or migrate a legacy
         // text-based one the first time this day is opened after upgrading
@@ -599,6 +700,7 @@ struct CallSheetEditor: View {
         shootDay.callSheet.breakfastTime    = breakfastTime
         shootDay.callSheet.lunchTime        = lunchTime
         shootDay.callSheet.dinnerTime       = dinnerTime
+        shootDay.callSheet.showCrewMealCount = showCrewMealCount
         shootDay.callSheet.basecamp         = basecamp
         shootDay.callSheet.crewPark         = crewPark
         shootDay.callSheet.hospitals        = hospitals
@@ -613,6 +715,21 @@ struct CallSheetEditor: View {
         shootDay.callSheet.locations       = locations
         shootDay.callSheet.notes           = notes
         shootDay.callSheet.castOverride    = castIsEdited ? castCharacters : nil
+
+        func trimmedDict(_ dict: [String: String]) -> [String: String] {
+            var result: [String: String] = [:]
+            for (k, v) in dict {
+                let t = v.trimmingCharacters(in: .whitespaces)
+                if !t.isEmpty { result[k] = t }
+            }
+            return result
+        }
+        shootDay.callSheet.castStatusOverride = trimmedDict(castStatusOverride)
+        shootDay.callSheet.castPickup         = trimmedDict(castPickup)
+        shootDay.callSheet.castHMW            = trimmedDict(castHMW)
+        shootDay.callSheet.castBlock          = trimmedDict(castBlock)
+        shootDay.callSheet.castSet            = trimmedDict(castSet)
+        shootDay.callSheet.castNotes          = trimmedDict(castNotesByCharacter)
 
         // Build the new ID-based crew override: checked roster members by ID + one-offs by name
         let roster = allRosterEntries

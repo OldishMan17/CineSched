@@ -20,6 +20,7 @@ struct ProductionSetupSheet: View {
     @State private var crew:          [CrewMember] = []
     @State private var boilerplateText: String = ""
     @State private var printCrewContactInfo: Bool = true
+    @State private var includeForcedCallBanner: Bool = false
 
     @State private var newActorName:          String = ""
     @State private var availabilityEditorIndex: Int? = nil
@@ -71,17 +72,30 @@ struct ProductionSetupSheet: View {
                         LabeledField("Contact Number",     placeholder: "e.g. 555-867-5309",  text: $contactNumber)
 
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Boilerplate / Rules").font(.subheadline).foregroundColor(.secondary)
+                            HStack {
+                                Text("Boilerplate / Rules").font(.subheadline).foregroundColor(.secondary)
+                                Spacer()
+                                Button("Use Default Text") {
+                                    boilerplateText = ProductionInfo.defaultBoilerplateText
+                                }
+                                .font(.caption)
+                            }
                             TextEditor(text: $boilerplateText)
                                 .frame(minHeight: 80).font(.body)
                                 .border(Color.gray.opacity(0.3), width: 1).cornerRadius(4)
-                            Text("Safety/conduct rules printed on every call sheet — no forced calls, visitor policy, harassment-free workplace statement, etc. Set once here rather than retyped per day.")
+                            Text("Safety/conduct rules printed on every call sheet — no forced calls, visitor policy, harassment-free workplace statement, etc. Set once here rather than retyped per day. Left blank, this block is omitted from the export entirely — click \"Use Default Text\" to start from the standard template instead.")
                                 .font(.caption).foregroundColor(.secondary)
                         }
 
                         VStack(alignment: .leading, spacing: 4) {
                             Toggle("Print crew contact info on call sheet", isOn: $printCrewContactInfo)
                             Text("Shows each crew member's phone/email in the call sheet's crew table. Indie and student productions usually want this on since there's no separate crew list — union productions typically leave it off and distribute contacts separately.")
+                                .font(.caption).foregroundColor(.secondary)
+                        }
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Toggle("Include forced-call/meal-penalty warning", isOn: $includeForcedCallBanner)
+                            Text("Prints the \"NO FORCED CALLS, PRE-CALLS, UPGRADES OR MEAL PENALTY WITHOUT PRIOR APPROVAL\" banner on the call sheet. A union-specific procedural clause — off by default since most productions using this app aren't under a union agreement.")
                                 .font(.caption).foregroundColor(.secondary)
                         }
                     }
@@ -315,6 +329,7 @@ struct ProductionSetupSheet: View {
                     productionInfo.crew            = crew
                     productionInfo.boilerplateText = boilerplateText
                     productionInfo.printCrewContactInfo = printCrewContactInfo
+                    productionInfo.includeForcedCallBanner = includeForcedCallBanner
                     onSave()
                     isPresented = false
                 }
@@ -332,6 +347,7 @@ struct ProductionSetupSheet: View {
             crew            = productionInfo.crew
             boilerplateText = productionInfo.boilerplateText
             printCrewContactInfo = productionInfo.printCrewContactInfo
+            includeForcedCallBanner = productionInfo.includeForcedCallBanner
         }
     }
 

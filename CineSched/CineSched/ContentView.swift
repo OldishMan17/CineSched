@@ -550,6 +550,19 @@ struct ContentView: View {
             cast.map { $0.caseInsensitiveCompare(old) == .orderedSame ? new : $0 }
         }
 
+        // The per-day cast columns (S/W/F, P/U, H/M/W, Block, Set, Notes) are keyed by
+        // normalized (trimmed, lowercased) character name, same identity as castOverride —
+        // their keys need the same rename applied, or a renamed character silently loses
+        // every value already entered for them.
+        let oldKey = old.lowercased()
+        let newKey = new.lowercased()
+        func renamedKeys(_ dict: [String: String]?) -> [String: String]? {
+            guard let dict = dict else { return nil }
+            var result: [String: String] = [:]
+            for (k, v) in dict { result[k == oldKey ? newKey : k] = v }
+            return result
+        }
+
         for i in allScenes.indices {
             allScenes[i].cast = renamed(allScenes[i].cast)
         }
@@ -562,6 +575,12 @@ struct ContentView: View {
             if let override = shootDays[d].callSheet.castOverride {
                 shootDays[d].callSheet.castOverride = renamed(override)
             }
+            shootDays[d].callSheet.castStatusOverride = renamedKeys(shootDays[d].callSheet.castStatusOverride)
+            shootDays[d].callSheet.castPickup         = renamedKeys(shootDays[d].callSheet.castPickup)
+            shootDays[d].callSheet.castHMW            = renamedKeys(shootDays[d].callSheet.castHMW)
+            shootDays[d].callSheet.castBlock          = renamedKeys(shootDays[d].callSheet.castBlock)
+            shootDays[d].callSheet.castSet            = renamedKeys(shootDays[d].callSheet.castSet)
+            shootDays[d].callSheet.castNotes          = renamedKeys(shootDays[d].callSheet.castNotes)
         }
         markDirty()
     }

@@ -400,6 +400,7 @@ struct CompactMonthCalendarView: View {
                 shootDay: $shootDays[idx],
                 productionInfo: productionInfo,
                 previousDayCallSheet: previousDayCallSheet(before: day),
+                allShootDays: shootDays,
                 isPresented: Binding(
                     get: { callSheetDay != nil },
                     set: { if !$0 { callSheetDay = nil } }

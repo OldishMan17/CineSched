@@ -201,6 +201,13 @@ struct CallSheetData: Codable {
     var crewPark:         String
     var hospitals:        [Hospital]
 
+    // Crew meal-count summary line ("CREW BREAKFAST x_ • CREW LUNCH x_") — a per-day toggle
+    // independent of showHeadcount below: showHeadcount controls whether the crew grid's "#"
+    // column is visible, this controls whether this separate summary line renders at all.
+    // Defaults to on (unlike showHeadcount) since the line is meant to be the normal case;
+    // an old saved file gets the same default as a brand-new day.
+    var showCrewMealCount: Bool
+
     // Headcount tracking — see CALLSHEET_LAYOUT.md §4.3: the crew grid's "#" column is a
     // 0/1 meal-count flag, not a quantity. showHeadcount is the per-day master switch
     // (defaults off); crewCountedIDs is which roster crew count toward it. nil (not merely
@@ -238,6 +245,26 @@ struct CallSheetData: Codable {
     var lo:                 String
     var pop:                String
 
+    // Cast table's per-character columns (CALLSHEET_SPEC.md §3.4/§2.5) — all keyed by
+    // normalized (trimmed, lowercased) character name, the same identity castOverride
+    // already uses, rather than CastMember.id: a day's cast list is name-based (castOverride
+    // is [String], not [UUID] like crew's ID-based override), and a character can appear on
+    // a day's sheet without ever matching a CastMember at all (a typo, a one-off addition),
+    // so name is the only identity that's always available. ContentView.renameCastCharacter
+    // renames these dict keys alongside castOverride when a character is renamed in
+    // Production Setup, for the same reason.
+    //
+    // castStatusOverride sits on top of auto-derived S/W/F status (see autoCastStatus below)
+    // — nil/missing key means "use the computed value," same convention as crewCallTimes
+    // falling back to the day's general crew call. The other five have no computed
+    // counterpart; a missing key there just means the field was never typed in.
+    var castStatusOverride: [String: String]?
+    var castPickup: [String: String]?
+    var castHMW:    [String: String]?
+    var castBlock:  [String: String]?
+    var castSet:    [String: String]?
+    var castNotes:  [String: String]?
+
     init(
         generalCallTime: String     = "",
         locations:       [Location] = [],
@@ -253,6 +280,7 @@ struct CallSheetData: Codable {
         basecamp:         String   = "",
         crewPark:         String   = "",
         hospitals:        [Hospital] = [],
+        showCrewMealCount: Bool = true,
         showHeadcount:    Bool = false,
         crewCountedIDs:   [UUID]? = nil,
         crewCallTimes:    [UUID: String]? = nil,
@@ -263,7 +291,13 @@ struct CallSheetData: Codable {
         gusts:            String = "",
         hi:               String = "",
         lo:               String = "",
-        pop:              String = ""
+        pop:              String = "",
+        castStatusOverride: [String: String]? = nil,
+        castPickup:         [String: String]? = nil,
+        castHMW:            [String: String]? = nil,
+        castBlock:          [String: String]? = nil,
+        castSet:            [String: String]? = nil,
+        castNotes:          [String: String]? = nil
     ) {
         self.generalCallTime  = generalCallTime
         self.locations        = locations
@@ -279,6 +313,7 @@ struct CallSheetData: Codable {
         self.basecamp         = basecamp
         self.crewPark         = crewPark
         self.hospitals        = hospitals
+        self.showCrewMealCount = showCrewMealCount
         self.showHeadcount    = showHeadcount
         self.crewCountedIDs   = crewCountedIDs
         self.crewCallTimes    = crewCallTimes
@@ -290,13 +325,20 @@ struct CallSheetData: Codable {
         self.hi               = hi
         self.lo               = lo
         self.pop              = pop
+        self.castStatusOverride = castStatusOverride
+        self.castPickup         = castPickup
+        self.castHMW            = castHMW
+        self.castBlock          = castBlock
+        self.castSet            = castSet
+        self.castNotes          = castNotes
     }
 
     private enum CodingKeys: String, CodingKey {
         case generalCallTime, locations, castOverride, crewOverride, crewIDOverride, crewOneOffs, notes
         case shootingCallTime, breakfastTime, lunchTime, dinnerTime, basecamp, crewPark, hospitals
-        case showHeadcount, crewCountedIDs, crewCallTimes
+        case showCrewMealCount, showHeadcount, crewCountedIDs, crewCallTimes
         case sunrise, sunset, weatherCondition, wind, gusts, hi, lo, pop
+        case castStatusOverride, castPickup, castHMW, castBlock, castSet, castNotes
     }
 
     init(from decoder: Decoder) throws {
@@ -316,6 +358,9 @@ struct CallSheetData: Codable {
         basecamp         = try c.decodeIfPresent(String.self, forKey: .basecamp) ?? ""
         crewPark         = try c.decodeIfPresent(String.self, forKey: .crewPark) ?? ""
         hospitals        = try c.decodeIfPresent([Hospital].self, forKey: .hospitals) ?? []
+        // Absent on any day saved before this field existed — defaults to on for those too,
+        // same as a brand-new day (unlike showHeadcount below, which defaults off).
+        showCrewMealCount = try c.decodeIfPresent(Bool.self, forKey: .showCrewMealCount) ?? true
         showHeadcount    = try c.decodeIfPresent(Bool.self, forKey: .showHeadcount) ?? false
         crewCountedIDs   = try c.decodeIfPresent([UUID].self, forKey: .crewCountedIDs)
         crewCallTimes    = try c.decodeIfPresent([UUID: String].self, forKey: .crewCallTimes)
@@ -327,6 +372,12 @@ struct CallSheetData: Codable {
         hi               = try c.decodeIfPresent(String.self, forKey: .hi) ?? ""
         lo               = try c.decodeIfPresent(String.self, forKey: .lo) ?? ""
         pop              = try c.decodeIfPresent(String.self, forKey: .pop) ?? ""
+        castStatusOverride = try c.decodeIfPresent([String: String].self, forKey: .castStatusOverride)
+        castPickup         = try c.decodeIfPresent([String: String].self, forKey: .castPickup)
+        castHMW            = try c.decodeIfPresent([String: String].self, forKey: .castHMW)
+        castBlock          = try c.decodeIfPresent([String: String].self, forKey: .castBlock)
+        castSet            = try c.decodeIfPresent([String: String].self, forKey: .castSet)
+        castNotes          = try c.decodeIfPresent([String: String].self, forKey: .castNotes)
     }
 
     /// Whether any weather field has been set for this day — the export omits the whole
@@ -356,6 +407,55 @@ struct CallSheetData: Codable {
         let general = generalCallTime.trimmingCharacters(in: .whitespaces)
         return general.isEmpty ? "—" : general
     }
+
+    private static func normalizedCastKey(_ character: String) -> String {
+        character.trimmingCharacters(in: .whitespaces).lowercased()
+    }
+
+    /// Auto-derives a character's S/W/F status for one day from the whole production's
+    /// schedule (CALLSHEET_SPEC.md §3.4): a character's earliest scheduled day is their
+    /// start, latest is their finish, anything between is a plain work day. The spec's own
+    /// combo list is `SW`, `WF`, `SWF`, `SWD`, `WD` — no bare `S`/`F`/`SF` — so a start day
+    /// combines with work (`SW`), a finish day combines with work (`WF`), and a character
+    /// scheduled on exactly one day gets `SWF` (they start, work, and finish all in that one
+    /// day) rather than an unlisted `SF`.
+    ///
+    /// This only ever returns SW/W/WF/SWF. `H` (hold — a gap day between start and finish
+    /// where the character genuinely isn't called) has no row to attach to here: the cast
+    /// table only lists characters actually present on a given day's schedule, so a real
+    /// hold day never reaches this function at all. `H`, along with `R`/`T`/`D`, stays a
+    /// manual override pick for the (rare) case someone adds a character to a day's cast
+    /// list specifically to record one of those — never something this derives on its own.
+    static func autoCastStatus(forCharacter character: String, on date: Date, allShootDays: [ShootDay]) -> String {
+        let key = normalizedCastKey(character)
+        guard !key.isEmpty else { return "" }
+        let days: [Date] = allShootDays.compactMap { day in
+            let characters = day.callSheet.castOverride ?? day.allCast
+            let present = characters.contains { normalizedCastKey($0) == key }
+            return present ? day.date : nil
+        }.sorted()
+        guard let first = days.first, let last = days.last else { return "" }
+        if first == last { return "SWF" }
+        if date == first { return "SW" }
+        if date == last  { return "WF" }
+        return "W"
+    }
+
+    /// This day's effective status for `character`: an explicit override if one was picked,
+    /// else the live auto-derived value — same fallback shape as `callTime(for:)` above.
+    func castStatus(for character: String, on date: Date, allShootDays: [ShootDay]) -> String {
+        let key = Self.normalizedCastKey(character)
+        if let explicit = castStatusOverride?[key]?.trimmingCharacters(in: .whitespaces), !explicit.isEmpty {
+            return explicit
+        }
+        return Self.autoCastStatus(forCharacter: character, on: date, allShootDays: allShootDays)
+    }
+
+    func castPickupValue(for character: String) -> String { castPickup?[Self.normalizedCastKey(character)] ?? "" }
+    func castHMWValue(for character: String)    -> String { castHMW?[Self.normalizedCastKey(character)] ?? "" }
+    func castBlockValue(for character: String)  -> String { castBlock?[Self.normalizedCastKey(character)] ?? "" }
+    func castSetValue(for character: String)    -> String { castSet?[Self.normalizedCastKey(character)] ?? "" }
+    func castNoteValue(for character: String)   -> String { castNotes?[Self.normalizedCastKey(character)] ?? "" }
 
     /// Resolves the raw character names (auto-pulled from scenes, or the manually-edited
     /// override) to "Actor — Character" using the *current* cast list — always live, so a
@@ -730,6 +830,11 @@ struct ProductionInfo: Codable, Equatable {
     // print them inline since there's no separate crew list. Defaults to on: most CineSched
     // users are indie/student productions, where inline contacts are the norm.
     var printCrewContactInfo: Bool
+    // The "NO FORCED CALLS, PRE-CALLS, UPGRADES OR MEAL PENALTY..." banner is a union-specific
+    // procedural clause (CALLSHEET_SPEC.md §2.3) — most productions using this app aren't
+    // under a union agreement, so it defaults to off rather than printing on every call sheet
+    // by default.
+    var includeForcedCallBanner: Bool
 
     init(
         companyName:   String = "",
@@ -739,7 +844,8 @@ struct ProductionInfo: Codable, Equatable {
         crew:          [CrewMember] = [],
         castList:      [CastMember] = [],
         boilerplateText: String = "",
-        printCrewContactInfo: Bool = true
+        printCrewContactInfo: Bool = true,
+        includeForcedCallBanner: Bool = false
     ) {
         self.companyName     = companyName
         self.director        = director
@@ -749,7 +855,13 @@ struct ProductionInfo: Codable, Equatable {
         self.castList        = castList
         self.boilerplateText = boilerplateText
         self.printCrewContactInfo = printCrewContactInfo
+        self.includeForcedCallBanner = includeForcedCallBanner
     }
+
+    /// The standard safety/conduct boilerplate this app used to hardcode as a silent
+    /// fallback — now only ever inserted via the explicit "Use default text" button in
+    /// Production Setup, never applied automatically when the field is left blank.
+    static let defaultBoilerplateText = "INDIVIDUAL CALL TIMES MAY VARY — PLEASE CHECK YOUR TIMES  •  NO VISITORS ON SET WITHOUT PRODUCER APPROVAL  •  NO PERSONAL PHOTOS OR SOCIAL MEDIA POSTS  •  SMOKE ONLY IN DESIGNATED AREAS — ALWAYS USE A BUTT CAN  •  THIS IS A HARASSMENT-FREE WORKPLACE — REPORT CONCERNS TO PRODUCTION OR AD STAFF"
 
     // Raw string values are unchanged from before ("directorName", "producerName") even
     // though the Swift property names are now `director`/`producer` — keeps the on-disk
@@ -759,7 +871,7 @@ struct ProductionInfo: Codable, Equatable {
         case companyName
         case directorName
         case producerName
-        case contactNumber, crew, castList, boilerplateText, printCrewContactInfo
+        case contactNumber, crew, castList, boilerplateText, printCrewContactInfo, includeForcedCallBanner
     }
 
     init(from decoder: Decoder) throws {
@@ -775,6 +887,10 @@ struct ProductionInfo: Codable, Equatable {
         // Absent on any production saved before this field existed — defaults to on, same
         // as a brand new production, per this field's own default rationale above.
         printCrewContactInfo = try c.decodeIfPresent(Bool.self, forKey: .printCrewContactInfo) ?? true
+        // Absent on any production saved before this field existed — defaults to off for
+        // those too, same as a brand new production, since most existing CineSched projects
+        // are exactly the non-union productions this defaults off for.
+        includeForcedCallBanner = try c.decodeIfPresent(Bool.self, forKey: .includeForcedCallBanner) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -787,6 +903,7 @@ struct ProductionInfo: Codable, Equatable {
         try c.encode(castList,      forKey: .castList)
         try c.encode(boilerplateText, forKey: .boilerplateText)
         try c.encode(printCrewContactInfo, forKey: .printCrewContactInfo)
+        try c.encode(includeForcedCallBanner, forKey: .includeForcedCallBanner)
     }
 
     /// A key contact might be in any of three states depending on when the file was saved:

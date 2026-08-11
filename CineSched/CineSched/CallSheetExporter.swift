@@ -86,8 +86,8 @@ class CallSheetExporter {
         drawBoilerplate(cursor: cursor, productionInfo: productionInfo)
         drawWeatherStrip(cursor: cursor, shootDay: shootDay)
         drawSceneTable(cursor: cursor, shootDay: shootDay, castIDs: castIDs)
-        drawForcedCallBanner(cursor: cursor)
-        drawCastTable(cursor: cursor, shootDay: shootDay, productionInfo: productionInfo, castIDs: castIDs)
+        drawForcedCallBanner(cursor: cursor, productionInfo: productionInfo)
+        drawCastTable(cursor: cursor, shootDay: shootDay, productionInfo: productionInfo, castIDs: castIDs, shootDays: shootDays)
         drawStandInsBlock(cursor: cursor)
 
         // Page 2 always starts on its own page — a call sheet is genuinely front/back, not
@@ -221,10 +221,10 @@ class CallSheetExporter {
             plain("DAY \(dayNumber) OF \(totalDays)", font: fontHeadBold, color: colorBlack)
         ]
 
-        // Column C — call times, location, basecamp, crew park. Each line renders the day's
-        // real value once entered in the call sheet editor; "—" is only the fallback for a
-        // field that's genuinely still empty, same placeholder convention the weather strip
-        // below uses for fields with no data source at all.
+        // Column C — call times, location, basecamp, crew park. Crew call/shooting call/
+        // breakfast/lunch are core enough to always show a line (falling back to "—" when
+        // unset); basecamp and crew park are like dinner below — genuinely optional, and
+        // omitted entirely rather than printing an empty "BASECAMP —" line when unset.
         var colCLines: [NSAttributedString] = []
         colCLines.append(labelValue("CREW CALL", shootDay.callSheet.generalCallTime.isEmpty ? "—" : shootDay.callSheet.generalCallTime))
         colCLines.append(labelValue("SHOOTING CALL", shootDay.callSheet.shootingCallTime.isEmpty ? "—" : shootDay.callSheet.shootingCallTime))
@@ -245,8 +245,12 @@ class CallSheetExporter {
                                         font: fontHeadValue, color: colorDark))
             }
         }
-        colCLines.append(labelValue("BASECAMP", shootDay.callSheet.basecamp.isEmpty ? "—" : shootDay.callSheet.basecamp))
-        colCLines.append(labelValue("CREW PARK", shootDay.callSheet.crewPark.isEmpty ? "—" : shootDay.callSheet.crewPark))
+        if !shootDay.callSheet.basecamp.isEmpty {
+            colCLines.append(labelValue("BASECAMP", shootDay.callSheet.basecamp))
+        }
+        if !shootDay.callSheet.crewPark.isEmpty {
+            colCLines.append(labelValue("CREW PARK", shootDay.callSheet.crewPark))
+        }
 
         let colAHeight = measureLines(colALines, width: colAWidth - 8)
         let colBHeight = measureLines(colBLines, width: colBWidth - 8)
@@ -275,11 +279,15 @@ class CallSheetExporter {
     /// once it's been filled in; falls back to a generic placeholder — drawn from
     /// CALLSHEET_SPEC.md §2.3's own list of common boilerplate clauses, not anything specific
     /// to a real production — for a production that hasn't set one yet.
+    /// Omitted entirely when left blank — no silent fallback to hardcoded default text. A
+    /// user who wants the standard template gets there via the explicit "Use Default Text"
+    /// button in Production Setup (ProductionInfo.defaultBoilerplateText), not an automatic
+    /// substitution they never asked for; a user who deliberately wants no boilerplate just
+    /// gets no block, same as this file's other empty-data blocks.
     private static func drawBoilerplate(cursor: PageCursor, productionInfo: ProductionInfo) {
         let custom = productionInfo.boilerplateText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let text = custom.isEmpty
-            ? "INDIVIDUAL CALL TIMES MAY VARY — PLEASE CHECK YOUR TIMES  •  NO VISITORS ON SET WITHOUT PRODUCER APPROVAL  •  NO PERSONAL PHOTOS OR SOCIAL MEDIA POSTS  •  SMOKE ONLY IN DESIGNATED AREAS — ALWAYS USE A BUTT CAN  •  THIS IS A HARASSMENT-FREE WORKPLACE — REPORT CONCERNS TO PRODUCTION OR AD STAFF"
-            : custom.uppercased()
+        guard !custom.isEmpty else { return }
+        let text = custom.uppercased()
         let para = NSMutableParagraphStyle(); para.alignment = .center; para.lineSpacing = 1.5
         let attr = NSAttributedString(string: text, attributes: [
             .font: fontHeadValue, .foregroundColor: colorDark, .paragraphStyle: para
@@ -297,10 +305,13 @@ class CallSheetExporter {
 
     // MARK: - Block 4: Weather strip
 
-    /// 8 equal cells, single row — CALLSHEET_LAYOUT.md §2 block 4. Omitted entirely when the
-    /// day has no weather data set at all (a full row of "—" reads as the app pointing out
-    /// something it can't do, where a real lean call sheet just wouldn't have the block); any
-    /// individual field left blank while others are filled prints "—" for just that column.
+    /// 8 equal cells, single row — CALLSHEET_LAYOUT.md §2 block 4, a fixed template rather
+    /// than a dynamic list. Omitted entirely when the day has no weather data set at all (a
+    /// full row of "—" reads as the app pointing out something it can't do, where a real lean
+    /// call sheet just wouldn't have the block); once shown, an individual field left blank
+    /// while others are filled just renders that cell empty — no dash, but the column stays
+    /// put under its header rather than narrowing/disappearing, so "WIND" never ends up
+    /// reading like it's under the "GUSTS" header.
     private static func drawWeatherStrip(cursor: PageCursor, shootDay: ShootDay) {
         let day = shootDay.callSheet
         guard day.hasWeatherData else { return }
@@ -319,7 +330,7 @@ class CallSheetExporter {
         var cx = margin
         for value in values {
             let text = value.trimmingCharacters(in: .whitespaces)
-            let attr = NSAttributedString(string: text.isEmpty ? "—" : text, attributes: [
+            let attr = NSAttributedString(string: text, attributes: [
                 .font: fontHeadValue, .foregroundColor: colorDark, .paragraphStyle: para
             ])
             let h = attr.size().height
@@ -336,13 +347,15 @@ class CallSheetExporter {
     private struct SceneColumns {
         static let widths: [CGFloat] = {
             // Percentages measured from REFERENCE_CALLSHEET.docx's actual column widths
-            // (1319, 5549, 1413, 639, 879, 670 dxa of 10469 total) — they match
-            // CALLSHEET_SPEC.md §3.1's rounded figures almost exactly, but sum to exactly
-            // 100% where the spec's rounded numbers are only approximate.
-            let pct: [CGFloat] = [0.1260, 0.5301, 0.1350, 0.0610, 0.0840, 0.0640]
+            // (1319, 5549, 1413, 639, 879 of 10469-670 total, the EST TIME column's 670 dxa
+            // folded into SET/SCENE DESCRIPTION since page count alone is enough for this
+            // app's scale and EST TIME was dropped) — they match CALLSHEET_SPEC.md §3.1's
+            // rounded figures almost exactly, but sum to exactly 100% where the spec's
+            // rounded numbers are only approximate.
+            let pct: [CGFloat] = [0.1260, 0.5941, 0.1350, 0.0610, 0.0840]
             return pct.map { $0 * usableWidth }
         }()
-        static let titles = ["SCENE", "SET / SCENE DESCRIPTION", "CAST", "D/N", "PAGES", "EST TIME"]
+        static let titles = ["SCENE", "SET / SCENE DESCRIPTION", "CAST", "D/N", "PAGES"]
     }
 
     private static func drawSceneTable(cursor: PageCursor, shootDay: ShootDay, castIDs: [String: Int]) {
@@ -402,10 +415,6 @@ class CallSheetExporter {
         // PAGES
         drawCentered(formattedEighths(scene.duration), font: fontBody, color: colorDark,
                      in: CGRect(x: cx, y: top - rowHeight, width: widths[4], height: rowHeight))
-        cx += widths[4]
-        // EST TIME
-        drawCentered(callSheetTime(scene.estimatedTime), font: fontBody, color: colorDark,
-                     in: CGRect(x: cx, y: top - rowHeight, width: widths[5], height: rowHeight))
 
         drawRowRules(widths: widths, rect: rect)
         cursor.y -= rowHeight
@@ -421,15 +430,6 @@ class CallSheetExporter {
             string: (label.isEmpty ? "ITEM" : label).uppercased(),
             attributes: [.font: fontBanner, .foregroundColor: colorBlack, .paragraphStyle: labelPara]
         )
-        // Not every company move or safety meeting takes the same amount of time — this
-        // is real per-item data (BannerItem.estimatedTime), not a placeholder, so it needs
-        // to show up here rather than only being folded into the table's TOTAL row.
-        if banner.estimatedTime > 0 {
-            labelText.append(NSAttributedString(
-                string: "  (\(callSheetTime(banner.estimatedTime)))",
-                attributes: [.font: fontBannerNote, .foregroundColor: colorMid, .paragraphStyle: labelPara]
-            ))
-        }
         lines.append(labelText)
         if !note.isEmpty {
             let notePara = NSMutableParagraphStyle(); notePara.alignment = .center
@@ -466,22 +466,19 @@ class CallSheetExporter {
         cx += mergedWidth
         drawCentered(formattedEighths(shootDay.totalDuration), font: NSFont.boldSystemFont(ofSize: 7.5), color: colorBlack,
                      in: CGRect(x: cx, y: top - rowHeight, width: widths[4], height: rowHeight))
-        cx += widths[4]
-        drawCentered(callSheetTime(shootDay.totalEstimatedTime), font: NSFont.boldSystemFont(ofSize: 7.5), color: colorBlack,
-                     in: CGRect(x: cx, y: top - rowHeight, width: widths[5], height: rowHeight))
 
         strokeRect(rect, color: colorRule, width: 0.8)
         strokeLine(from: CGPoint(x: margin + mergedWidth, y: top), to: CGPoint(x: margin + mergedWidth, y: top - rowHeight), color: colorRuleLight, width: 0.4)
-        strokeLine(from: CGPoint(x: margin + mergedWidth + widths[4], y: top), to: CGPoint(x: margin + mergedWidth + widths[4], y: top - rowHeight), color: colorRuleLight, width: 0.4)
         cursor.y -= rowHeight
     }
 
     // MARK: - Block 6: Forced-call warning banner
 
-    /// Same placeholder rationale as the boilerplate block — no per-production field for
-    /// this exists yet, so this draws the exact conventional line from CALLSHEET_SPEC.md
-    /// §2.3's own clause list, asterisk-wrapped and centered per CALLSHEET_LAYOUT.md §2.
-    private static func drawForcedCallBanner(cursor: PageCursor) {
+    /// A union-specific procedural clause (CALLSHEET_SPEC.md §2.3) — gated on
+    /// ProductionInfo.includeForcedCallBanner, which defaults off, since most productions
+    /// using this app aren't under a union agreement and this line isn't relevant to them.
+    private static func drawForcedCallBanner(cursor: PageCursor, productionInfo: ProductionInfo) {
+        guard productionInfo.includeForcedCallBanner else { return }
         let text = "*** NO FORCED CALLS, PRE-CALLS, UPGRADES OR MEAL PENALTY WITHOUT PRIOR APPROVAL FROM THE UPM ***"
         let rowHeight: CGFloat = 16
         cursor.ensureSpace(rowHeight)
@@ -505,7 +502,8 @@ class CallSheetExporter {
     }
 
     private static func drawCastTable(
-        cursor: PageCursor, shootDay: ShootDay, productionInfo: ProductionInfo, castIDs: [String: Int]
+        cursor: PageCursor, shootDay: ShootDay, productionInfo: ProductionInfo, castIDs: [String: Int],
+        shootDays: [ShootDay]
     ) {
         let widths = CastColumns.widths
         drawTableHeaderRow(cursor: cursor, widths: widths, titles: CastColumns.titles)
@@ -515,7 +513,8 @@ class CallSheetExporter {
             drawCastEmptyRow(cursor: cursor, totalWidth: widths.reduce(0, +))
         } else {
             for character in characters {
-                drawCastRow(cursor: cursor, character: character, productionInfo: productionInfo, castIDs: castIDs)
+                drawCastRow(cursor: cursor, shootDay: shootDay, character: character,
+                            productionInfo: productionInfo, castIDs: castIDs, shootDays: shootDays)
             }
         }
 
@@ -525,7 +524,8 @@ class CallSheetExporter {
     }
 
     private static func drawCastRow(
-        cursor: PageCursor, character: String, productionInfo: ProductionInfo, castIDs: [String: Int]
+        cursor: PageCursor, shootDay: ShootDay, character: String, productionInfo: ProductionInfo,
+        castIDs: [String: Int], shootDays: [ShootDay]
     ) {
         let widths = CastColumns.widths
         let rowHeight: CGFloat = 14
@@ -538,11 +538,22 @@ class CallSheetExporter {
         }
         let id     = castID(for: character, in: castIDs)
         let actor  = match?.actorName.isEmpty == false ? match!.actorName : "—"
-        // Status (S/W/F), pickup, H/M/W call, block, set call, and notes have no scheduling
-        // data source in the model yet (CastMember has no per-day call times) — "-" is the
-        // spec's own convention for "not applicable to this person," which is accurate here:
-        // every cell in these columns is currently untrackable, not merely blank.
-        let values = [id, actor.uppercased(), character.uppercased(), "-", "-", "-", "-", "-", "-"]
+        let callSheet = shootDay.callSheet
+        // Status auto-derives from the whole production's schedule unless explicitly
+        // overridden (CallSheetData.castStatus); the rest are plain per-day free text with
+        // no computed counterpart. Blank means "not entered" — same convention as every
+        // other optional per-day field in this exporter — not the "-" this row used to print
+        // unconditionally back when none of these columns had a data source at all.
+        let status = callSheet.castStatus(for: character, on: shootDay.date, allShootDays: shootDays)
+        let values = [
+            id, actor.uppercased(), character.uppercased(),
+            status,
+            callSheet.castPickupValue(for: character),
+            callSheet.castHMWValue(for: character),
+            callSheet.castBlockValue(for: character),
+            callSheet.castSetValue(for: character),
+            callSheet.castNoteValue(for: character)
+        ]
 
         var cx = margin
         for (i, value) in values.enumerated() {
@@ -930,27 +941,30 @@ class CallSheetExporter {
         }
     }
 
-    /// Meal counts (CALLSHEET_SPEC.md §2.8: "Crew Breakfast x60, BG Lunch x0"). Crew
-    /// breakfast/lunch both sum real per-day counted crew once the day's headcount toggle is
-    /// on — there's only one counted flag per person, not a separate one per meal, so both
-    /// numbers are the same sum. BG (background) headcount has no tracking anywhere in the
-    /// model, so it stays "—" rather than a guess, same as the whole line stays "—" when
-    /// headcount tracking is off for this day entirely.
+    /// Meal counts (CALLSHEET_SPEC.md §2.8: "Crew Breakfast x60, Crew Lunch x60" — one shared
+    /// count, not a separate number per meal). Gated on its own showCrewMealCount toggle,
+    /// independent of showHeadcount (which only controls the crew grid's "#" column) — reuses
+    /// the same per-person counted flag either way, since there's only one such flag per
+    /// person. Each segment is built independently and only included when its count is
+    /// nonzero; the whole line is omitted (not printed with "x0" or "—") when there's nothing
+    /// to show, or when the toggle is off. BG (background) headcount has no tracking anywhere
+    /// in the model yet, so no segment is built for it at all — revisit once that exists.
     private static func drawCrewMealCountRow(cursor: PageCursor, totalWidth: CGFloat, shootDay: ShootDay, productionInfo: ProductionInfo) {
+        guard shootDay.callSheet.showCrewMealCount else { return }
+
+        let countedTotal = productionInfo.crew.filter {
+            shootDay.callSheet.isCrewMemberCounted($0.id, in: productionInfo.crew)
+        }.count
+
+        var segments: [String] = []
+        if countedTotal > 0 { segments.append("CREW BREAKFAST x\(countedTotal)") }
+        if countedTotal > 0 { segments.append("CREW LUNCH x\(countedTotal)") }
+        guard !segments.isEmpty else { return }
+
         let rowHeight: CGFloat = 14
         cursor.ensureSpace(rowHeight)
         let rect = CGRect(x: margin, y: cursor.y - rowHeight, width: totalWidth, height: rowHeight)
-
-        let text: String
-        if shootDay.callSheet.showHeadcount {
-            let countedTotal = productionInfo.crew.filter {
-                shootDay.callSheet.isCrewMemberCounted($0.id, in: productionInfo.crew)
-            }.count
-            text = "CREW BREAKFAST x\(countedTotal)   •   CREW LUNCH x\(countedTotal)   •   BG LUNCH —"
-        } else {
-            text = "CREW BREAKFAST —   •   CREW LUNCH —   •   BG LUNCH —"
-        }
-        drawCentered(text, font: NSFont.boldSystemFont(ofSize: 7), color: colorDark, in: rect)
+        drawCentered(segments.joined(separator: "   •   "), font: NSFont.boldSystemFont(ofSize: 7), color: colorDark, in: rect)
         strokeRect(rect, color: colorRule, width: 0.6)
         cursor.y -= rowHeight
     }
@@ -1140,16 +1154,6 @@ class CallSheetExporter {
         }
     }
 
-    /// Call-sheet convention time format (":45", "1:45", "5:40") — distinct from the app's
-    /// own formattedTime ("1 hr 45 min"), which is right for on-screen UI but not what a
-    /// printed call sheet's EST TIME column uses.
-    private static func callSheetTime(_ minutes: Int) -> String {
-        let h = minutes / 60
-        let m = minutes % 60
-        if h == 0 { return String(format: ":%02d", m) }
-        return String(format: "%d:%02d", h, m)
-    }
-
     private static func fullFormattedDate(_ date: Date) -> String {
         let f = DateFormatter(); f.dateFormat = "EEEE, MMMM d, yyyy"; return f.string(from: date)
     }
@@ -1231,11 +1235,11 @@ class CallSheetExporter {
         attr.draw(in: CGRect(x: rect.minX, y: rect.minY + (rect.height - h) / 2, width: rect.width - 4, height: h))
     }
 
-    /// A narrow column ("EST TIME" at 6.4% width) can genuinely not fit its header on one
-    /// line at any reasonable font size — this measures each header's real wrapped height
-    /// (same textLayoutOptions used everywhere else in this file, so measuring and drawing
-    /// can't disagree) and sizes the row to whichever header needs the most lines, rather
-    /// than truncating with an ellipsis the way drawCentered's single-line assumption would.
+    /// A narrow column can genuinely not fit its header on one line at any reasonable font
+    /// size — this measures each header's real wrapped height (same textLayoutOptions used
+    /// everywhere else in this file, so measuring and drawing can't disagree) and sizes the
+    /// row to whichever header needs the most lines, rather than truncating with an ellipsis
+    /// the way drawCentered's single-line assumption would.
     private static func drawTableHeaderRow(cursor: PageCursor, widths: [CGFloat], titles: [String]) {
         let para = NSMutableParagraphStyle(); para.alignment = .center
         let headers: [NSAttributedString] = titles.map {
@@ -1244,8 +1248,8 @@ class CallSheetExporter {
         // The 1.15x factor matches PDFExporter.swift's wrappedHeight: boundingRect's
         // font-metric-based estimate consistently runs a little short of what draw(with:)
         // actually needs once text really wraps, and without this margin a 2-line header
-        // like "EST TIME" measures as fitting but then loses its second line to
-        // truncatesLastVisibleLine at draw time — measured, not guessed.
+        // measures as fitting but then loses its second line to truncatesLastVisibleLine at
+        // draw time — measured, not guessed.
         let heights: [CGFloat] = zip(headers, widths).map { header, w in
             ceil(header.boundingRect(with: CGSize(width: max(w - 4, 1), height: .greatestFiniteMagnitude),
                                       options: textLayoutOptions).height * 1.15)
