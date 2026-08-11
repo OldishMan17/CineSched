@@ -84,7 +84,7 @@ class CallSheetExporter {
         drawHeaderGrid(cursor: cursor, shootDay: shootDay, productionInfo: productionInfo,
                        dayNumber: dayNumber, totalDays: totalDays)
         drawBoilerplate(cursor: cursor, productionInfo: productionInfo)
-        drawWeatherStrip(cursor: cursor)
+        drawWeatherStrip(cursor: cursor, shootDay: shootDay)
         drawSceneTable(cursor: cursor, shootDay: shootDay, castIDs: castIDs)
         drawForcedCallBanner(cursor: cursor)
         drawCastTable(cursor: cursor, shootDay: shootDay, productionInfo: productionInfo, castIDs: castIDs)
@@ -297,13 +297,38 @@ class CallSheetExporter {
 
     // MARK: - Block 4: Weather strip
 
-    /// CineSched doesn't track weather data at all yet, so this block is omitted rather than
-    /// printed as a full row of "—" placeholders — a strip of 8 empty columns reads as the
-    /// app pointing out something it can't do, where a real lean call sheet just wouldn't
-    /// have the block. Once real weather data exists, this can render the actual 8-column
-    /// strip (structure already scoped out in CALLSHEET_LAYOUT.md §2 block 4).
-    private static func drawWeatherStrip(cursor: PageCursor) {
-        // Nothing to draw — see doc comment above.
+    /// 8 equal cells, single row — CALLSHEET_LAYOUT.md §2 block 4. Omitted entirely when the
+    /// day has no weather data set at all (a full row of "—" reads as the app pointing out
+    /// something it can't do, where a real lean call sheet just wouldn't have the block); any
+    /// individual field left blank while others are filled prints "—" for just that column.
+    private static func drawWeatherStrip(cursor: PageCursor, shootDay: ShootDay) {
+        let day = shootDay.callSheet
+        guard day.hasWeatherData else { return }
+
+        let titles = ["SUNRISE", "SUNSET", "WEATHER", "WIND", "GUSTS", "HI", "LOW", "POP"]
+        let values = [day.sunrise, day.sunset, day.weatherCondition, day.wind, day.gusts, day.hi, day.lo, day.pop]
+        let colWidth = usableWidth / CGFloat(titles.count)
+        let widths = Array(repeating: colWidth, count: titles.count)
+
+        drawTableHeaderRow(cursor: cursor, widths: widths, titles: titles)
+
+        let rowHeight: CGFloat = 14
+        cursor.ensureSpace(rowHeight)
+        let rect = CGRect(x: margin, y: cursor.y - rowHeight, width: usableWidth, height: rowHeight)
+        let para = NSMutableParagraphStyle(); para.alignment = .center
+        var cx = margin
+        for value in values {
+            let text = value.trimmingCharacters(in: .whitespaces)
+            let attr = NSAttributedString(string: text.isEmpty ? "—" : text, attributes: [
+                .font: fontHeadValue, .foregroundColor: colorDark, .paragraphStyle: para
+            ])
+            let h = attr.size().height
+            attr.draw(in: CGRect(x: cx + 2, y: rect.minY + (rowHeight - h) / 2, width: colWidth - 4, height: h))
+            cx += colWidth
+        }
+        drawRowRules(widths: widths, rect: rect)
+        strokeRect(rect, color: colorRule, width: 0.8)
+        cursor.y -= rowHeight
     }
 
     // MARK: - Block 5: Scene schedule table
@@ -650,12 +675,13 @@ class CallSheetExporter {
         }
         let columns = balanceIntoColumns(departmentBlocks, columnCount: blockCount)
         let counted = countedLookup(shootDay: shootDay, productionInfo: productionInfo)
+        let callTimes = callTimeLookup(shootDay: shootDay, productionInfo: productionInfo)
 
         let totalRows = columns.map { $0.count }.max() ?? 0
         for rowIndex in 0..<totalRows {
             drawCrewGridRowBand(cursor: cursor, columns: columns, rowIndex: rowIndex,
                                  blockWidths: blockWidths, blockTitles: blockTitles,
-                                 showHeadcount: showHeadcount, counted: counted)
+                                 showHeadcount: showHeadcount, counted: counted, callTimes: callTimes)
         }
 
         drawCrewMealCountRow(cursor: cursor, totalWidth: allWidths.reduce(0, +), shootDay: shootDay, productionInfo: productionInfo)
@@ -666,6 +692,14 @@ class CallSheetExporter {
     private static func countedLookup(shootDay: ShootDay, productionInfo: ProductionInfo) -> [UUID: Bool] {
         Dictionary(uniqueKeysWithValues: productionInfo.crew.map {
             ($0.id, shootDay.callSheet.isCrewMemberCounted($0.id, in: productionInfo.crew))
+        })
+    }
+
+    /// One (memberID → resolved call time) lookup for the whole table — each person's own
+    /// explicit call time if they have one, else the day's general crew call time, else "—".
+    private static func callTimeLookup(shootDay: ShootDay, productionInfo: ProductionInfo) -> [UUID: String] {
+        Dictionary(uniqueKeysWithValues: productionInfo.crew.map {
+            ($0.id, shootDay.callSheet.callTime(for: $0.id))
         })
     }
 
@@ -690,7 +724,7 @@ class CallSheetExporter {
     /// info — that's the single-column layout's job (drawCrewTableSingleColumn) — so it's
     /// #/TITLE/NAME/CALL when showHeadcount is on, TITLE/NAME/CALL when it's off.
     private static func crewBlockCells(
-        row: CrewGridRow?, widths: [CGFloat], showHeadcount: Bool, counted: [UUID: Bool]
+        row: CrewGridRow?, widths: [CGFloat], showHeadcount: Bool, counted: [UUID: Bool], callTimes: [UUID: String]
     ) -> [(text: NSAttributedString, width: CGFloat)] {
         func aligned(_ text: String, font: NSFont, color: NSColor, alignment: NSTextAlignment) -> NSAttributedString {
             let para = NSMutableParagraphStyle(); para.alignment = alignment
@@ -713,7 +747,7 @@ class CallSheetExporter {
         case .member(let member):
             let titleCell = aligned(member.role.isEmpty ? "—" : member.role.uppercased(), font: fontBody, color: colorDark, alignment: .left)
             let nameCell  = aligned(member.name.uppercased(), font: fontBody, color: colorDark, alignment: .left)
-            let callCell  = aligned("—", font: fontBody, color: colorDark, alignment: .center)
+            let callCell  = aligned(callTimes[member.id] ?? "—", font: fontBody, color: colorDark, alignment: .center)
             if showHeadcount {
                 let idCell = aligned((counted[member.id] ?? false) ? "1" : "0", font: fontBody, color: colorDark, alignment: .center)
                 return [(idCell, widths[0]), (titleCell, widths[1]), (nameCell, widths[2]), (callCell, widths[3])]
@@ -735,11 +769,11 @@ class CallSheetExporter {
     /// exactly what happened here before this fix ("Mother Fucker" → "Mother Fu…").
     private static func drawCrewGridRowBand(
         cursor: PageCursor, columns: [[CrewGridRow]], rowIndex: Int, blockWidths: [CGFloat], blockTitles: [String],
-        showHeadcount: Bool, counted: [UUID: Bool]
+        showHeadcount: Bool, counted: [UUID: Bool], callTimes: [UUID: String]
     ) {
         let blockCellSets: [[(text: NSAttributedString, width: CGFloat)]] = columns.map { column in
             crewBlockCells(row: rowIndex < column.count ? column[rowIndex] : nil, widths: blockWidths,
-                            showHeadcount: showHeadcount, counted: counted)
+                            showHeadcount: showHeadcount, counted: counted, callTimes: callTimes)
         }
         let allCells = blockCellSets.flatMap { $0 }
         let rowHeight = max(measureCellRow(allCells), 9) + 4
@@ -809,11 +843,12 @@ class CallSheetExporter {
         guard !departments.isEmpty else { return }
 
         let counted = countedLookup(shootDay: shootDay, productionInfo: productionInfo)
+        let callTimes = callTimeLookup(shootDay: shootDay, productionInfo: productionInfo)
         for (kind, members) in departments {
             drawCrewContactDepartmentHeader(cursor: cursor, kind: kind, widths: widths, titles: titles)
             for member in members {
                 drawCrewContactRow(cursor: cursor, member: member, widths: widths, titles: titles,
-                                    showHeadcount: showHeadcount, counted: counted)
+                                    showHeadcount: showHeadcount, counted: counted, callTimes: callTimes)
             }
         }
 
@@ -840,7 +875,7 @@ class CallSheetExporter {
 
     private static func drawCrewContactRow(
         cursor: PageCursor, member: CrewMember, widths: [CGFloat], titles: [String],
-        showHeadcount: Bool, counted: [UUID: Bool]
+        showHeadcount: Bool, counted: [UUID: Bool], callTimes: [UUID: String]
     ) {
         func aligned(_ text: String, font: NSFont, color: NSColor, alignment: NSTextAlignment = .left) -> NSAttributedString {
             let para = NSMutableParagraphStyle(); para.alignment = alignment
@@ -854,7 +889,7 @@ class CallSheetExporter {
         cells.append(aligned(member.name.uppercased(), font: fontBody, color: colorDark))
         cells.append(aligned(member.primaryPhone ?? "—", font: fontBody, color: colorDark))
         cells.append(aligned(member.primaryEmail ?? "—", font: fontBody, color: colorDark))
-        cells.append(aligned("—", font: fontBody, color: colorDark, alignment: .center))
+        cells.append(aligned(callTimes[member.id] ?? "—", font: fontBody, color: colorDark, alignment: .center))
 
         let cellPairs: [(text: NSAttributedString, width: CGFloat)] = zip(cells, widths).map { ($0, $1) }
         let rowHeight = max(measureCellRow(cellPairs), 9) + 4
@@ -1027,33 +1062,39 @@ class CallSheetExporter {
     // MARK: - Page 2, Block 13: Signature footer
 
     /// Name + phone for key roles (CALLSHEET_SPEC.md §2.10). Director/Producer come straight
-    /// from ProductionInfo's structured KeyContact fields; 1st/2nd AD have no dedicated
-    /// fields, so they're matched by searching crew role text for common aliases — a role
-    /// with no match still gets its own slot with "—", rather than being dropped, so the
-    /// footer's shape doesn't shift day to day. Line Producer/UPM/Location Manager/etc. from
-    /// the spec's full list have no data source at all (not even a role-text guess would be
-    /// reliable) and are left out rather than guessed.
+    /// from ProductionInfo's structured KeyContact fields. 1st AD has no dedicated field —
+    /// auto-picked by searching crew role text for common aliases ("1st ad", "first ad",
+    /// "1st assistant director"), so it just falls out of the crew list instead of being
+    /// something to fill in twice. 2nd AD and the rest of the spec's full list (Line
+    /// Producer, UPM, Location Manager, etc.) have no data source at all and are left out
+    /// rather than guessed.
+    ///
+    /// A role with no name/match is omitted entirely rather than shown as an empty "—"
+    /// slot — the remaining filled roles redistribute evenly across the full width, so a
+    /// footer with only Director/Producer filled in (or with a 1st AD match) reads as a
+    /// complete footer, not a fixed-slot layout with a visible gap. If nothing is filled in
+    /// at all, the whole block is omitted.
     private static func drawSignatureFooter(cursor: PageCursor, productionInfo: ProductionInfo) {
         struct Entry { let name: String; let role: String; let phone: String }
 
-        var entries: [Entry] = [
-            Entry(name: productionInfo.director.name.isEmpty ? "—" : productionInfo.director.name,
-                  role: "DIRECTOR", phone: productionInfo.director.primaryPhone ?? "—"),
-            Entry(name: productionInfo.producer.name.isEmpty ? "—" : productionInfo.producer.name,
-                  role: "PRODUCER", phone: productionInfo.producer.primaryPhone ?? "—")
-        ]
-
-        let adRoles: [(label: String, aliases: [String])] = [
-            ("1ST AD", ["1st ad", "first ad", "1st assistant director"]),
-            ("2ND AD", ["2nd ad", "second ad", "2nd assistant director"])
-        ]
-        for (label, aliases) in adRoles {
-            let match = productionInfo.crew.first { member in
-                aliases.contains { member.role.lowercased().contains($0) }
-            }
-            entries.append(Entry(name: (match?.name.isEmpty == false) ? match!.name : "—",
-                                  role: label, phone: match?.primaryPhone ?? "—"))
+        var entries: [Entry] = []
+        for (contact, role) in [(productionInfo.director, "DIRECTOR"), (productionInfo.producer, "PRODUCER")] {
+            let name = contact.name.trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty else { continue }
+            entries.append(Entry(name: name, role: role, phone: contact.primaryPhone ?? "—"))
         }
+
+        let firstADAliases = ["1st ad", "first ad", "1st assistant director"]
+        if let match = productionInfo.crew.first(where: { member in
+            firstADAliases.contains { member.role.lowercased().contains($0) }
+        }) {
+            let name = match.name.trimmingCharacters(in: .whitespaces)
+            if !name.isEmpty {
+                entries.append(Entry(name: name, role: "1ST AD", phone: match.primaryPhone ?? "—"))
+            }
+        }
+
+        guard !entries.isEmpty else { return }
 
         let colWidth = usableWidth / CGFloat(entries.count)
         let cellLines: [[NSAttributedString]] = entries.map { entry in

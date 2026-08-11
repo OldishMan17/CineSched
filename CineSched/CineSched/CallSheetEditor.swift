@@ -23,16 +23,25 @@ struct CallSheetEditor: View {
     @State private var basecamp:      String = ""
     @State private var crewPark:      String = ""
     @State private var hospitals:     [Hospital] = []
+    @State private var sunrise:          String = ""
+    @State private var sunset:           String = ""
+    @State private var weatherCondition: String = ""
+    @State private var wind:             String = ""
+    @State private var gusts:            String = ""
+    @State private var weatherHi:        String = ""
+    @State private var weatherLo:        String = ""
+    @State private var pop:              String = ""
     @State private var locations:    [Location] = []
     @State private var castCharacters: [String] = []   // raw character names, NOT "Actor — Character" text
     @State private var castIsEdited: Bool       = false
     @State private var notes:        String     = ""
 
-    // Crew state — parallel bool arrays track checked/counted state, both indexed to
+    // Crew state — parallel arrays track checked/counted/call-time state, all indexed to
     // allRosterEntries
     @State private var crewChecked:  [Bool]   = []
     @State private var crewCounted:  [Bool]   = []   // headcount — only editable/shown per-person when showHeadcount is on
     @State private var showHeadcount: Bool    = false
+    @State private var crewCallTimes: [String] = []  // per-person call time — shown for any selected crew member
     @State private var crewOneOffs:  [String] = []   // free-typed additions not in roster
     @State private var newCrewEntry: String   = ""
 
@@ -114,6 +123,29 @@ struct CallSheetEditor: View {
                         LabeledTextField("Breakfast", placeholder: "e.g. 0600–0700, or COME HAVING HAD", text: $breakfastTime)
                         LabeledTextField("Lunch",     placeholder: "e.g. 1300 (½ hr)",                   text: $lunchTime)
                         LabeledTextField("Dinner",    placeholder: "optional",                           text: $dinnerTime)
+                    }
+
+                    Divider()
+
+                    // Weather — matches the export's 8-column weather strip. Text fields for
+                    // everything, same as the time fields above: sunrise/sunset are often
+                    // given as plain times, and condition/wind/gusts/hi/lo/POP are naturally
+                    // short text ("SW 10-15", "30%"), not numeric types. Leaving all eight
+                    // blank omits the whole strip on export.
+                    sectionHeader("Weather", icon: "cloud.sun")
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 8) {
+                            LabeledTextField("Sunrise", placeholder: "e.g. 6:12 AM", text: $sunrise)
+                            LabeledTextField("Sunset",  placeholder: "e.g. 8:47 PM", text: $sunset)
+                            LabeledTextField("Weather", placeholder: "e.g. Partly Cloudy", text: $weatherCondition)
+                            LabeledTextField("Wind",    placeholder: "e.g. SW 10-15", text: $wind)
+                        }
+                        HStack(spacing: 8) {
+                            LabeledTextField("Gusts", placeholder: "e.g. 25 mph", text: $gusts)
+                            LabeledTextField("Hi",    placeholder: "e.g. 72°",     text: $weatherHi)
+                            LabeledTextField("Low",   placeholder: "e.g. 58°",     text: $weatherLo)
+                            LabeledTextField("POP",   placeholder: "e.g. 30%",     text: $pop)
+                        }
                     }
 
                     Divider()
@@ -433,6 +465,20 @@ struct CallSheetEditor: View {
                 }
             }
             Spacer()
+            // Call time — shown for any crew member selected for this day, independent of
+            // the headcount toggle. Text, not a time picker: CALLSHEET_SPEC.md §3.5 — real
+            // call times are often "O/C" or "TBD", not just a clock time. Blank here falls
+            // back to the day's general crew call time at export (CallSheetData.callTime(for:)),
+            // not to a value pre-filled in this field.
+            if index < crewChecked.count, crewChecked[index], index < crewCallTimes.count {
+                TextField("Call", text: Binding(
+                    get: { crewCallTimes[index] },
+                    set: { crewCallTimes[index] = $0 }
+                ))
+                .textFieldStyle(.roundedBorder)
+                .font(.caption2)
+                .frame(width: 70)
+            }
             // Headcount only matters (and is only shown) for crew actually selected for this
             // day, and only when the day's master toggle is on — never shown disabled.
             if showHeadcount, index < crewChecked.count, crewChecked[index], index < crewCounted.count {
@@ -485,6 +531,14 @@ struct CallSheetEditor: View {
         basecamp         = shootDay.callSheet.basecamp
         crewPark         = shootDay.callSheet.crewPark
         hospitals        = shootDay.callSheet.hospitals
+        sunrise          = shootDay.callSheet.sunrise
+        sunset           = shootDay.callSheet.sunset
+        weatherCondition = shootDay.callSheet.weatherCondition
+        wind             = shootDay.callSheet.wind
+        gusts            = shootDay.callSheet.gusts
+        weatherHi        = shootDay.callSheet.hi
+        weatherLo        = shootDay.callSheet.lo
+        pop              = shootDay.callSheet.pop
         locations = shootDay.callSheet.locations
         notes     = shootDay.callSheet.notes
 
@@ -531,6 +585,12 @@ struct CallSheetEditor: View {
             }
             return member.isDailyDefault
         }
+
+        // Call times — left blank unless this member already has an explicit one saved;
+        // blank always means "use the day's general crew call time," never a value that
+        // needs pre-filling here.
+        let explicitCallTimes = shootDay.callSheet.crewCallTimes ?? [:]
+        crewCallTimes = roster.map { explicitCallTimes[$0.id] ?? "" }
     }
 
     private func saveToDay() {
@@ -542,6 +602,14 @@ struct CallSheetEditor: View {
         shootDay.callSheet.basecamp         = basecamp
         shootDay.callSheet.crewPark         = crewPark
         shootDay.callSheet.hospitals        = hospitals
+        shootDay.callSheet.sunrise          = sunrise
+        shootDay.callSheet.sunset           = sunset
+        shootDay.callSheet.weatherCondition = weatherCondition
+        shootDay.callSheet.wind             = wind
+        shootDay.callSheet.gusts            = gusts
+        shootDay.callSheet.hi               = weatherHi
+        shootDay.callSheet.lo               = weatherLo
+        shootDay.callSheet.pop              = pop
         shootDay.callSheet.locations       = locations
         shootDay.callSheet.notes           = notes
         shootDay.callSheet.castOverride    = castIsEdited ? castCharacters : nil
@@ -559,5 +627,12 @@ struct CallSheetEditor: View {
         shootDay.callSheet.showHeadcount = showHeadcount
         let countedIDs = zip(roster, crewCounted).compactMap { member, isCounted in isCounted ? member.id : nil }
         shootDay.callSheet.crewCountedIDs = countedIDs
+
+        var callTimes: [UUID: String] = [:]
+        for (i, member) in roster.enumerated() where i < crewCallTimes.count {
+            let trimmed = crewCallTimes[i].trimmingCharacters(in: .whitespaces)
+            if !trimmed.isEmpty { callTimes[member.id] = trimmed }
+        }
+        shootDay.callSheet.crewCallTimes = callTimes
     }
 }

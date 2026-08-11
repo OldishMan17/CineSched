@@ -214,6 +214,30 @@ struct CallSheetData: Codable {
     var showHeadcount:  Bool
     var crewCountedIDs: [UUID]?
 
+    // Per-crew, per-day call time — CALLSHEET_SPEC.md §3.5: a real call time is often text,
+    // not a clock time ("O/C" on call, "TBD", a plain time), so this is free text like
+    // shootingCallTime/breakfastTime above, not a strict time type. nil means "no explicit
+    // per-day call times have ever been saved" (old file or brand-new day); once saved it's
+    // always a full dict, one entry per roster member who had a value typed in — someone not
+    // present in it just means their cell was left blank, resolved to the day's general crew
+    // call time at read time (see CallSheetExporter), not stored redundantly here.
+    var crewCallTimes: [UUID: String]?
+
+    // Weather strip — CALLSHEET_LAYOUT.md §2 block 4. All free text like the time fields
+    // above: sunrise/sunset are often given as plain times, but condition/wind/gusts/hi/
+    // lo/pop are naturally short text ("SW 10-15", "30%") rather than numeric types. A day
+    // with all eight blank means "no weather data set" and the strip is omitted entirely
+    // (CallSheetExporter); any field left blank while others are filled prints as "—" for
+    // just that column.
+    var sunrise:          String
+    var sunset:            String
+    var weatherCondition:  String
+    var wind:               String
+    var gusts:              String
+    var hi:                 String
+    var lo:                 String
+    var pop:                String
+
     init(
         generalCallTime: String     = "",
         locations:       [Location] = [],
@@ -230,7 +254,16 @@ struct CallSheetData: Codable {
         crewPark:         String   = "",
         hospitals:        [Hospital] = [],
         showHeadcount:    Bool = false,
-        crewCountedIDs:   [UUID]? = nil
+        crewCountedIDs:   [UUID]? = nil,
+        crewCallTimes:    [UUID: String]? = nil,
+        sunrise:          String = "",
+        sunset:           String = "",
+        weatherCondition: String = "",
+        wind:             String = "",
+        gusts:            String = "",
+        hi:               String = "",
+        lo:               String = "",
+        pop:              String = ""
     ) {
         self.generalCallTime  = generalCallTime
         self.locations        = locations
@@ -248,12 +281,22 @@ struct CallSheetData: Codable {
         self.hospitals        = hospitals
         self.showHeadcount    = showHeadcount
         self.crewCountedIDs   = crewCountedIDs
+        self.crewCallTimes    = crewCallTimes
+        self.sunrise          = sunrise
+        self.sunset           = sunset
+        self.weatherCondition = weatherCondition
+        self.wind             = wind
+        self.gusts            = gusts
+        self.hi               = hi
+        self.lo               = lo
+        self.pop              = pop
     }
 
     private enum CodingKeys: String, CodingKey {
         case generalCallTime, locations, castOverride, crewOverride, crewIDOverride, crewOneOffs, notes
         case shootingCallTime, breakfastTime, lunchTime, dinnerTime, basecamp, crewPark, hospitals
-        case showHeadcount, crewCountedIDs
+        case showHeadcount, crewCountedIDs, crewCallTimes
+        case sunrise, sunset, weatherCondition, wind, gusts, hi, lo, pop
     }
 
     init(from decoder: Decoder) throws {
@@ -275,6 +318,23 @@ struct CallSheetData: Codable {
         hospitals        = try c.decodeIfPresent([Hospital].self, forKey: .hospitals) ?? []
         showHeadcount    = try c.decodeIfPresent(Bool.self, forKey: .showHeadcount) ?? false
         crewCountedIDs   = try c.decodeIfPresent([UUID].self, forKey: .crewCountedIDs)
+        crewCallTimes    = try c.decodeIfPresent([UUID: String].self, forKey: .crewCallTimes)
+        sunrise          = try c.decodeIfPresent(String.self, forKey: .sunrise) ?? ""
+        sunset           = try c.decodeIfPresent(String.self, forKey: .sunset) ?? ""
+        weatherCondition = try c.decodeIfPresent(String.self, forKey: .weatherCondition) ?? ""
+        wind             = try c.decodeIfPresent(String.self, forKey: .wind) ?? ""
+        gusts            = try c.decodeIfPresent(String.self, forKey: .gusts) ?? ""
+        hi               = try c.decodeIfPresent(String.self, forKey: .hi) ?? ""
+        lo               = try c.decodeIfPresent(String.self, forKey: .lo) ?? ""
+        pop              = try c.decodeIfPresent(String.self, forKey: .pop) ?? ""
+    }
+
+    /// Whether any weather field has been set for this day — the export omits the whole
+    /// strip when this is false (old files and brand-new days both resolve here identically,
+    /// since the eight fields simply default to "").
+    var hasWeatherData: Bool {
+        ![sunrise, sunset, weatherCondition, wind, gusts, hi, lo, pop]
+            .allSatisfy { $0.trimmingCharacters(in: .whitespaces).isEmpty }
     }
 
     /// Whether `memberID` counts toward this day's headcount: the day's explicit saved
@@ -285,6 +345,16 @@ struct CallSheetData: Codable {
             return explicit.contains(memberID)
         }
         return roster.first(where: { $0.id == memberID })?.isDailyDefault ?? false
+    }
+
+    /// `memberID`'s call time for this day: their own explicit value if one was typed in,
+    /// else the day's general crew call time, else "—" if neither is set.
+    func callTime(for memberID: UUID) -> String {
+        if let explicit = crewCallTimes?[memberID]?.trimmingCharacters(in: .whitespaces), !explicit.isEmpty {
+            return explicit
+        }
+        let general = generalCallTime.trimmingCharacters(in: .whitespaces)
+        return general.isEmpty ? "—" : general
     }
 
     /// Resolves the raw character names (auto-pulled from scenes, or the manually-edited
